@@ -14,9 +14,10 @@ def test_telemetry_roundtrip():
 
 
 def test_command_roundtrip():
-    c = Command(throttle=0.68, pitch=0.12, roll=-0.07)
+    c = Command(throttle=0.68, vane1=0.12, vane2=-0.07, vane3=0.05, vane4=0.0)
     back = Command.from_json(c.to_json())
     assert back == c
+    assert c.vanes == (0.12, -0.07, 0.05, 0.0)
 
 
 def test_telemetry_tolerates_unknown_keys():
