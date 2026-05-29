@@ -1,0 +1,61 @@
+# ── Drone physical parameters ──────────────────────────────────────────────────
+# These mirror the constants in blender-navigatio.py. Change them here ONLY if
+# you also change them in the sim, so the controller's inverse model stays valid.
+drone:
+  mass: 0.70           # kg
+  gravity: 9.81        # m/s^2
+  thrust_max: 15.0     # N at full prop speed
+  prop_max_speed: 720.0  # deg/s
+  max_vane_deg: 28.0   # max vane deflection
+  rho_air: 1.225
+  rotor_radius: 0.15
+
+# ── Cascaded control gains ──────────────────────────────────────────────────────
+# position --P--> velocity setpoint --PID--> acceleration command
+control:
+  pos_xy_p: 1.2        # 1/s : horizontal position -> velocity
+  pos_z_p: 1.5         # 1/s : altitude  position -> velocity
+  v_max_xy: 4.0        # m/s : speed cap (horizontal)
+  vz_max: 2.5          # m/s : climb/descent cap
+
+  vel_xy:              # velocity -> horizontal acceleration
+    kp: 3.0
+    ki: 0.8
+    kd: 0.15
+    out_min: -6.0
+    out_max: 6.0
+    i_limit: 4.0
+
+  vel_z:               # velocity -> vertical acceleration
+    kp: 4.0
+    ki: 2.0
+    kd: 0.2
+    out_min: -8.0
+    out_max: 8.0
+    i_limit: 6.0
+
+# ── MQTT transport ──────────────────────────────────────────────────────────────
+mqtt:
+  host: localhost   # broker (mosquitto) runs here on the Mac
+  port: 1883
+  # username: myuser
+  # password: mypass
+  client_id: drone-nav
+  keepalive: 30
+  topic_telemetry: drone/telemetry   # sim -> nav
+  topic_command: drone/cmd           # nav -> sim
+  topic_status: drone/status         # nav -> world
+
+# ── Mission ─────────────────────────────────────────────────────────────────────
+mission:
+  # Each waypoint is [x, y, z] in metres (world frame). The first entry takes
+  # the drone off the ground; the rest are the A -> B -> ... path.
+  waypoints:
+    - [0.0, 0.0, 2.0]    # take off / climb to 2 m above origin (point A)
+    - [5.0, 0.0, 2.0]    # fly to point B
+    - [5.0, 5.0, 3.0]    # and on to C
+  arrival_radius: 0.30   # m
+  arrival_speed: 0.30    # m/s
+  hold_time: 1.0         # s sustained inside the arrival window
+  loop_rate_hz: 50.0
+  loop: false
