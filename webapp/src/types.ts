@@ -12,10 +12,14 @@ export interface Telemetry {
   prop_speed: number; // deg/s
 }
 
+// Four independent vane angles (radians). Vanes 1 & 3 → body-X (fore/aft),
+// vanes 2 & 4 → body-Y (lateral).
 export interface Command {
   throttle: number; // [0,1]
-  pitch: number; // rad, Vanes 1-3
-  roll: number; // rad, Vanes 2-4
+  vane1: number;
+  vane2: number;
+  vane3: number;
+  vane4: number;
 }
 
 export interface PidTerm {
@@ -23,15 +27,13 @@ export interface PidTerm {
   i: number;
   d: number;
   out: number;
-  error: number;
   setpoint: number;
   measurement: number;
 }
 
+// Only the vertical (altitude → climb-rate → accel) loop exists now.
 export interface PidBlock {
-  vx: PidTerm;
-  vy: PidTerm;
-  vz: PidTerm;
+  alt: PidTerm;
 }
 
 export interface StateMsg {
@@ -39,9 +41,7 @@ export interface StateMsg {
   telemetry: Telemetry;
   command: Command;
   status: string;
-  target_index: number | null;
   pid: PidBlock | null;
-  setpoint: { vx: number; vy: number; vz: number } | null;
 }
 
 export interface MetaMsg {
@@ -57,7 +57,7 @@ export interface MetaMsg {
   };
   hover_throttle: number;
   ground_z: number;
-  waypoints: [number, number, number][];
+  target_altitude: number;
 }
 
 // One flattened sample kept in the rolling history (for charts).
@@ -75,11 +75,11 @@ export interface HistorySample {
   rpm: number;
   // command
   throttle: number;
-  pitchDeg: number;
-  rollDeg: number;
-  // pid (NaN when unavailable)
-  px: number; ix: number; dx: number; ox: number; spx: number;
-  py: number; iy: number; dy: number; oy: number; spy: number;
-  pz: number; iz: number; dz: number; oz: number; spz: number;
+  v1: number; v2: number; v3: number; v4: number; // degrees
+  // altitude PID (NaN when unavailable)
+  altP: number;
+  altI: number;
+  altD: number;
+  altOut: number;
+  altSp: number; // climb-rate setpoint (m/s)
 }
-</content>

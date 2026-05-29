@@ -5,35 +5,34 @@ import { COLOR, ROTOR_RADIUS } from "../consts";
 // Handles the parent uses to animate the airframe each frame.
 export interface CopterRefs {
   prop: THREE.Group | null;
-  vanePitch: THREE.Group | null; // Vanes 1-3 (fore/aft)
-  vaneRoll: THREE.Group | null; // Vanes 2-4 (left/right)
-  matPitch: THREE.MeshStandardMaterial;
-  matRoll: THREE.MeshStandardMaterial;
+  // Four independent vane hinges. v1/v3 on the X arm (fore/aft), v2/v4 on Y (lateral).
+  vanes: (THREE.Group | null)[];
+  vaneMats: THREE.MeshStandardMaterial[];
   matProp: THREE.MeshStandardMaterial;
   discMat: THREE.MeshBasicMaterial;
 }
 
 const R = ROTOR_RADIUS;
+// vanes 1 & 3 share the "pitch/X" colour, vanes 2 & 4 the "roll/Y" colour
+const VANE_COLOR = [COLOR.vanePitch, COLOR.vaneRoll, COLOR.vanePitch, COLOR.vaneRoll];
 
 // The singlecopter, built in a local Z-up frame (matching Blender). The parent
-// drives position / yaw / lean on the wrapping group, and prop spin + vane
-// deflection (and highlight emissive) through the returned refs/materials.
+// drives position / yaw / lean on the wrapping group, and prop spin + the four
+// independent vane deflections (and highlight emissive) through the refs.
 const Singlecopter = forwardRef<CopterRefs, { scale?: number }>(function Singlecopter(
   { scale = 1 },
   ref
 ) {
   const propG = useRef<THREE.Group>(null);
-  const pitchG = useRef<THREE.Group>(null);
-  const rollG = useRef<THREE.Group>(null);
+  const v1 = useRef<THREE.Group>(null);
+  const v2 = useRef<THREE.Group>(null);
+  const v3 = useRef<THREE.Group>(null);
+  const v4 = useRef<THREE.Group>(null);
 
-  // Material instances (stable) so the parent can pulse emissiveIntensity to
-  // indicate which parts are actively moving.
-  const matPitch = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: COLOR.vanePitch, metalness: 0.1, roughness: 0.5, emissive: COLOR.vanePitch, emissiveIntensity: 0 }),
-    []
-  );
-  const matRoll = useMemo(
-    () => new THREE.MeshStandardMaterial({ color: COLOR.vaneRoll, metalness: 0.1, roughness: 0.5, emissive: COLOR.vaneRoll, emissiveIntensity: 0 }),
+  const vaneMats = useMemo(
+    () => VANE_COLOR.map((c) => new THREE.MeshStandardMaterial({
+      color: c, metalness: 0.1, roughness: 0.5, emissive: c, emissiveIntensity: 0,
+    })),
     []
   );
   const matProp = useMemo(
@@ -49,10 +48,14 @@ const Singlecopter = forwardRef<CopterRefs, { scale?: number }>(function Singlec
 
   useImperativeHandle(ref, () => ({
     get prop() { return propG.current; },
-    get vanePitch() { return pitchG.current; },
-    get vaneRoll() { return rollG.current; },
-    matPitch, matRoll, matProp, discMat,
-  }), [matPitch, matRoll, matProp, discMat]);
+    get vanes() { return [v1.current, v2.current, v3.current, v4.current]; },
+    vaneMats, matProp, discMat,
+  }), [vaneMats, matProp, discMat]);
+
+  // X-arm fins (v1 fore +X, v3 aft −X): thin in X, hinge about Y
+  const xFin = <boxGeometry args={[0.006, 0.1, 0.1]} />;
+  // Y-arm fins (v2 left +Y, v4 right −Y): thin in Y, hinge about X
+  const yFin = <boxGeometry args={[0.1, 0.006, 0.1]} />;
 
   return (
     <group scale={scale}>
@@ -93,28 +96,21 @@ const Singlecopter = forwardRef<CopterRefs, { scale?: number }>(function Singlec
         </mesh>
       </group>
 
-      {/* Vanes 1-3 : pitch pair (fore +X / aft -X), hinge about Y */}
-      <group ref={pitchG} position={[0, 0, 0.02]}>
-        <mesh position={[0.1, 0, 0]} castShadow material={matPitch}>
-          <boxGeometry args={[0.006, 0.1, 0.1]} />
-        </mesh>
-        <mesh position={[-0.1, 0, 0]} castShadow material={matPitch}>
-          <boxGeometry args={[0.006, 0.1, 0.1]} />
-        </mesh>
+      {/* four independent vanes, each hinged at the centre */}
+      <group ref={v1} position={[0, 0, 0.02]}>
+        <mesh position={[0.1, 0, 0]} castShadow material={vaneMats[0]}>{xFin}</mesh>
       </group>
-
-      {/* Vanes 2-4 : roll pair (left +Y / right -Y), hinge about X */}
-      <group ref={rollG} position={[0, 0, 0.02]}>
-        <mesh position={[0, 0.1, 0]} castShadow material={matRoll}>
-          <boxGeometry args={[0.1, 0.006, 0.1]} />
-        </mesh>
-        <mesh position={[0, -0.1, 0]} castShadow material={matRoll}>
-          <boxGeometry args={[0.1, 0.006, 0.1]} />
-        </mesh>
+      <group ref={v3} position={[0, 0, 0.02]}>
+        <mesh position={[-0.1, 0, 0]} castShadow material={vaneMats[2]}>{xFin}</mesh>
+      </group>
+      <group ref={v2} position={[0, 0, 0.02]}>
+        <mesh position={[0, 0.1, 0]} castShadow material={vaneMats[1]}>{yFin}</mesh>
+      </group>
+      <group ref={v4} position={[0, 0, 0.02]}>
+        <mesh position={[0, -0.1, 0]} castShadow material={vaneMats[3]}>{yFin}</mesh>
       </group>
     </group>
   );
 });
 
 export default Singlecopter;
-</content>

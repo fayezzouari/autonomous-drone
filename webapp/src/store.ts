@@ -94,22 +94,22 @@ class SimStore {
   private pushHistory(s: StateMsg) {
     const t = s.telemetry;
     const c = s.command;
-    const pid = s.pid;
-    const sp = s.setpoint;
-    const speed = Math.hypot(t.vx, t.vy, t.vz);
+    const alt = s.pid?.alt;
+    const deg = 180 / Math.PI;
     const sample: HistorySample = {
       t: t.t,
       x: t.x, y: t.y, z: t.z,
       vx: t.vx, vy: t.vy, vz: t.vz,
-      speed,
+      speed: Math.hypot(t.vx, t.vy, t.vz),
       yaw: t.yaw,
       rpm: (t.prop_speed / 360) * 60,
       throttle: c.throttle,
-      pitchDeg: (c.pitch * 180) / Math.PI,
-      rollDeg: (c.roll * 180) / Math.PI,
-      px: pid?.vx.p ?? NaN, ix: pid?.vx.i ?? NaN, dx: pid?.vx.d ?? NaN, ox: pid?.vx.out ?? NaN, spx: sp?.vx ?? NaN,
-      py: pid?.vy.p ?? NaN, iy: pid?.vy.i ?? NaN, dy: pid?.vy.d ?? NaN, oy: pid?.vy.out ?? NaN, spy: sp?.vy ?? NaN,
-      pz: pid?.vz.p ?? NaN, iz: pid?.vz.i ?? NaN, dz: pid?.vz.d ?? NaN, oz: pid?.vz.out ?? NaN, spz: sp?.vz ?? NaN,
+      v1: c.vane1 * deg, v2: c.vane2 * deg, v3: c.vane3 * deg, v4: c.vane4 * deg,
+      altP: alt?.p ?? NaN,
+      altI: alt?.i ?? NaN,
+      altD: alt?.d ?? NaN,
+      altOut: alt?.out ?? NaN,
+      altSp: alt?.setpoint ?? NaN,
     };
     const h = this.history;
     h.push(sample);
@@ -139,4 +139,3 @@ class SimStore {
 }
 
 export const store = new SimStore();
-</content>

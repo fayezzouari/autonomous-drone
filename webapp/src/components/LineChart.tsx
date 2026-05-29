@@ -170,7 +170,7 @@ export default function LineChart({
   }, [series, windowSec, zeroLine, symmetric, emptyHint]);
 
   return (
-    <div className="chart-card card">
+    <>
       <div className="chart-body">
         <canvas ref={canvasRef} style={{ width: "100%", height }} />
       </div>
@@ -183,7 +183,6 @@ export default function LineChart({
           </span>
         ))}
       </div>
-    </div>
+    </>
   );
 }
-</content>
