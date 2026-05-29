@@ -1,6 +1,6 @@
 # ── Drone physical parameters ──────────────────────────────────────────────────
-# These mirror the constants in blender-navigatio.py. Change them here ONLY if
-# you also change them in the sim, so the controller's inverse model stays valid.
+# Mirror the constants in blender-navigatio.py. Change them here ONLY if you also
+# change them in the sim, so the controller's thrust model stays valid.
 drone:
   mass: 0.70           # kg
   gravity: 9.81        # m/s^2
@@ -10,23 +10,16 @@ drone:
   rho_air: 1.225
   rotor_radius: 0.15
 
-# ── Cascaded control gains ──────────────────────────────────────────────────────
-# position --P--> velocity setpoint --PID--> acceleration command
+# ── Altitude control ────────────────────────────────────────────────────────────
+# The controller holds this altitude via a PID on throttle. Steering is manual:
+# the four vane angles are supplied raw on the vane-input topic below.
 control:
-  pos_xy_p: 1.2        # 1/s : horizontal position -> velocity
-  pos_z_p: 1.5         # 1/s : altitude  position -> velocity
-  v_max_xy: 4.0        # m/s : speed cap (horizontal)
-  vz_max: 2.5          # m/s : climb/descent cap
+  target_altitude: 2.0   # m   altitude to hold
+  pos_z_p: 1.5           # 1/s altitude error -> climb-rate setpoint
+  vz_max: 2.5            # m/s climb/descent cap
+  loop_rate_hz: 50.0     # controller update rate
 
-  vel_xy:              # velocity -> horizontal acceleration
-    kp: 3.0
-    ki: 0.8
-    kd: 0.15
-    out_min: -6.0
-    out_max: 6.0
-    i_limit: 4.0
-
-  vel_z:               # velocity -> vertical acceleration
+  vel_z:                 # climb-rate -> vertical acceleration PID
     kp: 4.0
     ki: 2.0
     kd: 0.2
@@ -34,28 +27,56 @@ control:
     out_max: 8.0
     i_limit: 6.0
 
+# ── Autonomous A → B control (--goto / --mission) ────────────────────────────────
+goto:
+  pos_xy_p: 1.2          # 1/s horizontal position -> velocity
+  pos_z_p: 1.5           # 1/s altitude  position -> velocity
+  v_max_xy: 4.0          # m/s horizontal speed cap
+  vz_max: 2.5            # m/s climb/descent cap
+  target_yaw: 0.0        # heading (rad) held while travelling
+  vel_xy:                # horizontal velocity -> acceleration PID
+    kp: 3.0
+    ki: 0.8
+    kd: 0.15
+    out_min: -6.0
+    out_max: 6.0
+    i_limit: 4.0
+  vel_z:                 # vertical velocity -> acceleration PID
+    kp: 4.0
+    ki: 2.0
+    kd: 0.2
+    out_min: -8.0
+    out_max: 8.0
+    i_limit: 6.0
+  yaw:                   # heading error -> yaw vane deflection PID
+    kp: 1.5
+    ki: 0.0
+    kd: 0.1
+    out_min: -0.384      # ±22°
+    out_max: 0.384
+
+# ── Waypoint mission (used by --mission) ──────────────────────────────────────────
+# A -> B, far apart and at different altitudes.
+mission:
+  waypoints:
+    - [0.0, 0.0, 3.0]      # A  — climb off the ground to 3 m
+    - [12.0, 0.0, 7.0]     #    — fly out +X while climbing to 7 m
+    - [12.0, 12.0, 4.0]    #    — turn +Y and descend to 4 m
+    - [-4.0, 8.0, 9.0]     # B  — cross back and climb to 9 m
+  arrival_radius: 0.5      # m
+  arrival_speed: 0.4       # m/s
+  hold_time: 1.0           # s sustained inside the arrival window
+  loop: false
+
 # ── MQTT transport ──────────────────────────────────────────────────────────────
 mqtt:
-  host: localhost   # broker (mosquitto) runs here on the Mac
+  host: localhost        # broker (mosquitto) location
   port: 1883
   # username: myuser
   # password: mypass
   client_id: drone-nav
   keepalive: 30
   topic_telemetry: drone/telemetry   # sim -> nav
-  topic_command: drone/cmd           # nav -> sim
+  topic_command: drone/cmd           # nav -> sim  (throttle + 4 vane angles)
+  topic_vane_input: drone/vanes      # external -> nav (raw vane angles)
   topic_status: drone/status         # nav -> world
-
-# ── Mission ─────────────────────────────────────────────────────────────────────
-mission:
-  # Each waypoint is [x, y, z] in metres (world frame). The first entry takes
-  # the drone off the ground; the rest are the A -> B -> ... path.
-  waypoints:
-    - [0.0, 0.0, 2.0]    # take off / climb to 2 m above origin (point A)
-    - [5.0, 0.0, 2.0]    # fly to point B
-    - [5.0, 5.0, 3.0]    # and on to C
-  arrival_radius: 0.30   # m
-  arrival_speed: 0.30    # m/s
-  hold_time: 1.0         # s sustained inside the arrival window
-  loop_rate_hz: 50.0
-  loop: false
