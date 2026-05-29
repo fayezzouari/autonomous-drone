@@ -78,27 +78,38 @@ YAW_DRAG_K      = 0.50   # N·m/(rad/s)  aerodynamic yaw damping
 AUTOROT_GAIN    = 20.0   # prop deg/s of autorotation per m/s of descent
 AUTOROT_MAX_FR  = 0.25   # autorotation caps at this fraction of PROP_MAX_SPEED
 
+# ── Scene object names ────────────────────────────────────────────────────────
+VANE_1      = "Vane 1"          # North vane  (+Y arm)
+VANE_2      = "Vane 2"          # East  vane  (+X arm)
+VANE_3      = "Vane 3"          # South vane  (−Y arm)
+VANE_4      = "Vane 4"          # West  vane  (−X arm)
+VANE_ARM    = 0.13              # moment arm [m] for vane yaw torque
+YAW_DEG     = 22.0             # max individual vane angle for yaw [°]
+PROP_OBJ    = "prop"
+ROOT_NAME   = "Drone_Root"
+GROUND_NAME = "Ground_Plane"
+SKYBOX      = "skybox"
+
+# Four independent vanes, in order [v1, v2, v3, v4] matching the MQTT command.
+# Index 0,2 (Vane 1/3, N/S, Y-arm) → fore/aft; 1,3 (Vane 2/4, E/W, X-arm) → lateral.
+# Sign per vane matches the reference's visual convention (1 & 3 negated).
+VANE_OBJECTS = [VANE_1, VANE_2, VANE_3, VANE_4]
+VANE_SIGNS   = [-1.0, +1.0, -1.0, +1.0]
+
 # ── MQTT bridge config ──────────────────────────────────────────────────────
-# Edit these to point at your broker. Telemetry is published every tick; the
-# navigator publishes autopilot commands which switch the drone into autopilot
-# mode (gamepad/keyboard input is ignored while autopilot commands arrive).
+# Telemetry is published every tick; the navigator publishes autopilot commands
+# {throttle, vane1..vane4} which latch autopilot mode on (gamepad/keyboard input
+# is ignored while autopilot commands arrive). vane1..vane4 ARE the four
+# independent vane angles a1..a4 — applied raw, no mixing.
 BROKER_HOST     = "10.158.32.93"   # the Mac running mosquitto + the navigator
 BROKER_PORT     = 1883
-BROKER_USER     = None        # or "username"
-BROKER_PASS     = None        # or "password"
+BROKER_USER     = None
+BROKER_PASS     = None
 TOPIC_TELEMETRY = "drone/telemetry"   # sim → nav
 TOPIC_COMMAND   = "drone/cmd"         # nav → sim
 TELEMETRY_EVERY = 1           # publish telemetry every N physics ticks
 AUTOPILOT_PROP_ACCEL = 1500   # deg/s²  spin-up rate toward commanded throttle
 AUTOPILOT_PROP_DECEL = 400    # deg/s²  spin-down rate toward commanded throttle
-
-# ── Scene object names ────────────────────────────────────────────────────────
-VANE_PITCH  = "Vanes 1-3"
-VANE_ROLL   = "Vanes 2-4"
-PROP_OBJ    = "prop"
-ROOT_NAME   = "Drone_Root"
-GROUND_NAME = "Ground_Plane"
-SKYBOX      = "skybox"
 
 # ── XInput (Xbox / XInput-compatible) ────────────────────────────────────────
 class _GP(ctypes.Structure):
@@ -144,7 +155,9 @@ def _read_xi(slot):
             "throttle":  bool(gp.wButtons & 0x4000),
             "l2":        max(0.0, (gp.bLeftTrigger  - 30) / 225.0),
             "r2":        max(0.0, (gp.bRightTrigger - 30) / 225.0),
-            "cam_reset": bool(gp.wButtons & 0x0080)}
+            "cam_reset": bool(gp.wButtons & 0x0080),
+            "dpad_yaw":  1.0 if (gp.wButtons & 0x0004) else
+                        (-1.0 if (gp.wButtons & 0x0008) else 0.0)}
 
 # ── winmm / DirectInput (PS4, PS5, generic) ───────────────────────────────────
 class _JOYINFOEX(ctypes.Structure):
@@ -188,11 +201,20 @@ def _read_mm(slot):
             return 0.0
         s = math.copysign(1.0, v)
         return s * (abs(v) - JOY_DEADZONE) / (1.0 - JOY_DEADZONE) * (-1 if inv else 1)
+    _pov = info.dwPOV
+    _dpad_yaw = 0.0
+    if _pov != 0xFFFF:              # 0xFFFF = hat centred / not pressed
+        _deg = _pov / 100.0         # centidegrees → degrees
+        if 225.0 <= _deg <= 315.0:
+            _dpad_yaw =  1.0        # D-pad Left  → CCW yaw
+        elif 45.0 <= _deg <= 135.0:
+            _dpad_yaw = -1.0        # D-pad Right → CW  yaw
     return {"pitch": norm(info.dwYpos, inv=True), "roll": norm(info.dwXpos),
             "throttle":  bool(info.dwButtons & 0x4),
             "l2":        min(1.0, max(0.0, info.dwUpos / 65535.0)),
             "r2":        min(1.0, max(0.0, info.dwVpos / 65535.0)),
-            "cam_reset": bool(info.dwButtons & 0x800)}
+            "cam_reset": bool(info.dwButtons & 0x800),
+            "dpad_yaw":  _dpad_yaw}
 
 def _read_gamepad():
     if _xi_slot >= 0:
@@ -303,10 +325,13 @@ S.cam_reset_prev = False
 S.phys_tilt_x    = 0.0   # smooth visual roll lean
 S.phys_tilt_y    = 0.0   # smooth visual pitch lean
 S.frame_count    = 0     # tick counter for oscillation phase
+S.axes_yaw       = 0.0   # keyboard yaw axis  (−1 CCW … +1 CW)
+S.cmd_yaw        = 0.0   # current vane yaw deflection [rad]
 
 # ── Autopilot (MQTT) state ────────────────────────────────────────────────────
 S.autopilot   = False                                  # True once a cmd arrives
-S.ap_cmd      = {"throttle": 0.0, "pitch": 0.0, "roll": 0.0}  # pitch/roll = vane rad
+S.ap_cmd      = {"throttle": 0.0, "v1": 0.0, "v2": 0.0, "v3": 0.0, "v4": 0.0}
+S.vane_cmd    = [0.0, 0.0, 0.0, 0.0]                    # applied angles a1..a4 (rad)
 S.mqtt_client = getattr(S, "mqtt_client", None)         # set up below if paho present
 
 # Physics state — initialise from Drone_Root current position
@@ -357,6 +382,7 @@ def _tick():
         S.axes["pitch"]       = joy["pitch"]
         S.axes["roll"]        = joy["roll"]
         S.buttons["throttle"] = joy["throttle"]
+        S.axes_yaw            = joy.get("dpad_yaw", 0.0)  # D-pad left/right → yaw
 
         # 1b. L2/R2 → camera Z-orbit around drone
         CAM_STEP = math.radians(CAM_RATE) * DT
@@ -371,28 +397,48 @@ def _tick():
 
     # 2. Vane rate-mode integration + spring-back when stick released
     def clamp(v, lo, hi): return max(lo, min(hi, v))
-    def integrate(cmd, axis):
+    def integrate(cmd, axis, max_r=MAX_RAD):
         if abs(axis) > 0.01:
-            return clamp(cmd + axis * TILT_STEP, -MAX_RAD, MAX_RAD)
+            return clamp(cmd + axis * TILT_STEP, -max_r, max_r)
         d = -cmd
         return cmd + min(abs(d), RET_STEP) * (1.0 if d > 0 else -1.0)
 
+    S.cmd["pitch"] = integrate(S.cmd["pitch"], S.axes["pitch"])
+    S.cmd["roll"]  = integrate(S.cmd["roll"],  S.axes["roll"])
+
+    # 3. Individual vane mixing — pitch/roll/yaw on 4 independent vanes
+    #    Mixing matrix (N/S pair = pitch±yaw ; E/W pair = roll±yaw):
+    #      a1 = ap+ay (North)   a3 = ap-ay (South)
+    #      a2 = ar+ay (East)    a4 = ar-ay (West)
+    #    This keeps pitch/roll clean while yaw swirls all four vanes
+    #    in a consistent direction to generate a net Z-axis torque.
     if S.autopilot:
-        # Autopilot commands vane *angles* directly (clamped to the limit).
-        S.cmd["pitch"] = clamp(S.ap_cmd["pitch"], -MAX_RAD, MAX_RAD)
-        S.cmd["roll"]  = clamp(S.ap_cmd["roll"],  -MAX_RAD, MAX_RAD)
+        # Autopilot supplies the four vane angles a1..a4 RAW (no mixing).
+        _a1 = clamp(S.ap_cmd["v1"], -MAX_RAD, MAX_RAD)
+        _a2 = clamp(S.ap_cmd["v2"], -MAX_RAD, MAX_RAD)
+        _a3 = clamp(S.ap_cmd["v3"], -MAX_RAD, MAX_RAD)
+        _a4 = clamp(S.ap_cmd["v4"], -MAX_RAD, MAX_RAD)
+        # Representative pitch/roll so the HUD overlays stay coherent.
+        S.cmd["pitch"] = 0.5 * (_a1 + _a3)
+        S.cmd["roll"]  = 0.5 * (_a2 + _a4)
+        S.cmd_yaw      = 0.25 * ((_a1 - _a3) + (_a2 - _a4))
     else:
-        S.cmd["pitch"] = integrate(S.cmd["pitch"], S.axes["pitch"])
-        S.cmd["roll"]  = integrate(S.cmd["roll"],  S.axes["roll"])
+        # Manual mode: mix pitch/roll/yaw onto the four vanes.
+        #   a1 = ap+ay (North)  a3 = ap-ay (South)
+        #   a2 = ar+ay (East)   a4 = ar-ay (West)
+        S.cmd_yaw = integrate(S.cmd_yaw, S.axes_yaw, math.radians(YAW_DEG))
+        _ap = S.cmd["pitch"]; _ar = S.cmd["roll"]; _ay = S.cmd_yaw
+        _a1 = _ap + _ay;  _a3 = _ap - _ay   # North / South
+        _a2 = _ar + _ay;  _a4 = _ar - _ay   # East  / West
 
-    # 3. Apply vane rotations (local euler, relative to Drone_Root)
-    v13 = bpy.data.objects.get(VANE_PITCH)
-    if v13 and VANE_PITCH in S.neutral_rot:
-        v13.rotation_euler.y = S.neutral_rot[VANE_PITCH][1] - S.cmd["pitch"]
-
-    v24 = bpy.data.objects.get(VANE_ROLL)
-    if v24 and VANE_ROLL in S.neutral_rot:
-        v24.rotation_euler.y = S.neutral_rot[VANE_ROLL][1] + S.cmd["roll"]
+    S.vane_cmd = [_a1, _a2, _a3, _a4]
+    # Apply each vane to its own object. Vane 1 & 3 (N/S, Y-arm pair) negated
+    # because their local Y-axis is mirrored — same physics angle, opposite
+    # visual direction.
+    for _vname, _vangle, _sign in zip(VANE_OBJECTS, S.vane_cmd, VANE_SIGNS):
+        _vo = bpy.data.objects.get(_vname)
+        if _vo and _vname in S.neutral_rot:
+            _vo.rotation_euler.y = S.neutral_rot[_vname][1] + _sign * _vangle
 
     # 4. Propeller: throttle → spin-up; release → spin-down with autorotation
     #    Autorotation = falling drone spins prop via relative wind, like a
@@ -400,7 +446,7 @@ def _tick():
     #    lift and keeps vane authority even with engine off.
     prop = bpy.data.objects.get(PROP_OBJ)
     if S.autopilot:
-        # Continuous throttle: ramp prop speed toward commanded fraction.
+        # Continuous throttle: ramp prop speed toward the commanded fraction.
         target_speed = clamp(S.ap_cmd["throttle"], 0.0, 1.0) * PROP_MAX_SPEED
         if S.prop_speed < target_speed:
             S.prop_speed = min(target_speed,
@@ -421,8 +467,11 @@ def _tick():
         prop.rotation_euler.z += math.radians(S.prop_speed * PROP_VISUAL_MULT * DT)
 
     # ── 5. Advanced aerodynamics ─────────────────────────────────────────────
-    ap = S.cmd["pitch"]
-    ar = S.cmd["roll"]
+    # The four vane angles come straight from step 3 (raw in autopilot, mixed
+    # in manual mode). Effective pitch/roll (pair means) drive the thrust-loss.
+    a1, a2, a3, a4 = S.vane_cmd
+    ap = 0.5 * (a1 + a3)   # effective pitch (mean of N/S pair)
+    ar = 0.5 * (a2 + a4)   # effective roll  (mean of E/W pair)
 
     # Ground effect (Cheeseman-Bennett): reflected airflow under the disc
     # boosts effective thrust by up to GE_GAIN when close to the surface.
@@ -446,8 +495,10 @@ def _tick():
     # This keeps controls relative to the drone's nose (pitch always pushes
     # the drone in its own forward/back direction regardless of world yaw).
     F_lat   = VANE_COEFF * v_eff_sq
-    Fx_body = -F_lat * math.sin(ap)   # pitch vane: −X in drone frame
-    Fy_body =  F_lat * math.sin(ar)   # roll  vane: +Y in drone frame
+    # Net lateral force = average of N+S pair and E+W pair
+    # sin(a+y)+sin(a-y) = 2·sin(a)·cos(y) ≈ 2·sin(a) for small y
+    Fx_body = -F_lat * (math.sin(a1) + math.sin(a3)) * 0.5
+    Fy_body =  F_lat * (math.sin(a2) + math.sin(a4)) * 0.5
     cy_h = math.cos(S.phys_yaw); sy_h = math.sin(S.phys_yaw)
     Fx = Fx_body * cy_h - Fy_body * sy_h   # rotate body → world
     Fy = Fx_body * sy_h + Fy_body * cy_h
@@ -475,8 +526,14 @@ def _tick():
     # Real singlecopters need vane yaw control to cancel this — here it causes
     # a realistic slow yaw drift at high throttle.
     Q_react        = -PROP_TORQUE_K * T_prop
+    # Vane yaw torque: differential swirl of all 4 vanes.
+    # Q_vane = arm · F_lat · [(sin a1-sin a3) + (sin a2-sin a4)]
+    #        = arm · F_lat · 2·sin(ay)·(cos ap + cos ar)
+    Q_vane  = VANE_ARM * F_lat * (
+                  (math.sin(a1) - math.sin(a3)) +
+                  (math.sin(a2) - math.sin(a4)))
     Q_damp         = -YAW_DRAG_K    * S.phys_yaw_vel
-    S.phys_yaw_vel += (Q_react + Q_damp) / YAW_INERTIA * DT
+    S.phys_yaw_vel += (Q_react + Q_vane + Q_damp) / YAW_INERTIA * DT
     S.phys_yaw     += S.phys_yaw_vel * DT
 
     # ── 8. Ground collision ───────────────────────────────────────────────────
@@ -569,10 +626,9 @@ S._tick = _tick
 
 
 # ── MQTT bridge ────────────────────────────────────────────────────────────────
-# Telemetry out (sim → nav) and autopilot commands in (nav → sim). paho runs its
-# network loop on a background thread; on_message only writes to S.ap_cmd /
-# S.autopilot, which the main-thread _tick reads — no shared mutation hazard
-# beyond simple float assignment.
+# Telemetry out (sim → nav) + autopilot commands in (nav → sim). paho runs its
+# network loop on a background thread; on_message only writes S.ap_cmd /
+# S.autopilot, read by the main-thread _tick.
 import json as _json
 
 def _publish_telemetry(S):
@@ -585,6 +641,12 @@ def _publish_telemetry(S):
         "vx": S.phys_vel.x, "vy": S.phys_vel.y, "vz": S.phys_vel.z,
         "yaw": S.phys_yaw,
         "prop_speed": S.prop_speed,
+        # Actuator state, so a remote viewer (the web twin) mirrors the vanes
+        # and throttle under ANY control source — autopilot or manual gamepad/
+        # keyboard. Extra keys are ignored by the navigator's Telemetry parser.
+        "throttle": S.prop_speed / PROP_MAX_SPEED,
+        "v1": S.vane_cmd[0], "v2": S.vane_cmd[1],
+        "v3": S.vane_cmd[2], "v4": S.vane_cmd[3],
     })
     try:
         client.publish(TOPIC_TELEMETRY, payload)
@@ -602,10 +664,13 @@ def _on_command(client, userdata, msg):
         return
     if "throttle" in data:
         S.ap_cmd["throttle"] = float(data["throttle"])
-    if "pitch" in data:
-        S.ap_cmd["pitch"] = float(data["pitch"])
-    if "roll" in data:
-        S.ap_cmd["roll"] = float(data["roll"])
+    # Accept vane1..vane4 (preferred) or v1..v4 aliases.
+    for i in (1, 2, 3, 4):
+        key = "v%d" % i
+        if ("vane%d" % i) in data:
+            S.ap_cmd[key] = float(data["vane%d" % i])
+        elif key in data:
+            S.ap_cmd[key] = float(data[key])
     S.autopilot = True   # first command latches autopilot mode on
 
 
@@ -619,7 +684,6 @@ def _connect_mqtt(S):
               "       <blender>/python/bin/python -m pip install paho-mqtt")
         return None
 
-    # Clean up a previous client across re-runs of this script.
     old = getattr(S, "mqtt_client", None)
     if old is not None:
         try:
@@ -909,6 +973,7 @@ class SINGLECOPTER_OT_Keys(bpy.types.Operator):
         if event.type == "ESC" and event.value == "PRESS":
             S.running = False
             S.axes["pitch"] = S.axes["roll"] = 0.0
+            S.axes_yaw = 0.0
             S.buttons["throttle"] = False
             for _attr in ('_draw_handle_2d', '_draw_handle_3d'):
                 _h = getattr(S, _attr, None)
@@ -928,16 +993,16 @@ class SINGLECOPTER_OT_Keys(bpy.types.Operator):
             self.report({"INFO"}, "■ Singlecopter stopped (ESC)")
             return {"CANCELLED"}
         if event.type == "UP_ARROW":
-            S.axes["pitch"] = -1.0 if event.value == "PRESS" else 0.0
+            S.axes["pitch"] = -1.0 if event.value in ("PRESS", "REPEAT") else 0.0
             return {"RUNNING_MODAL"}
         if event.type == "DOWN_ARROW":
-            S.axes["pitch"] =  1.0 if event.value == "PRESS" else 0.0
+            S.axes["pitch"] =  1.0 if event.value in ("PRESS", "REPEAT") else 0.0
             return {"RUNNING_MODAL"}
         if event.type == "LEFT_ARROW":
-            S.axes["roll"]  = -1.0 if event.value == "PRESS" else 0.0
+            S.axes_yaw = 1.0 if event.value in ("PRESS", "REPEAT") else 0.0   # CCW
             return {"RUNNING_MODAL"}
         if event.type == "RIGHT_ARROW":
-            S.axes["roll"]  =  1.0 if event.value == "PRESS" else 0.0
+            S.axes_yaw = -1.0 if event.value in ("PRESS", "REPEAT") else 0.0  # CW
             return {"RUNNING_MODAL"}
         if event.type == "X":
             S.buttons["throttle"] = (event.value == "PRESS")
@@ -960,10 +1025,10 @@ _xi_slot = _find_xi_slot()
 _mm_slot = _find_mm_slot() if _xi_slot < 0 else -1
 
 # ── Reset vane axes to zero, snapshot neutral rotations ───────────────────────
-for name, axis in [(VANE_PITCH, "y"), (VANE_ROLL, "y")]:
+for name in [VANE_1, VANE_2, VANE_3, VANE_4]:
     obj = bpy.data.objects.get(name)
     if obj:
-        setattr(obj.rotation_euler, axis, 0.0)
+        obj.rotation_euler.y = 0.0
         S.neutral_rot[name] = tuple(obj.rotation_euler)
     else:
         print(f"[singlecopter] WARNING: '{name}' not found!")
@@ -984,8 +1049,10 @@ S.axes["pitch"] = S.axes["roll"] = 0.0
 S.buttons["throttle"] = False
 S.phys_yaw     = 0.0
 S.phys_yaw_vel = 0.0
+S.cmd_yaw      = 0.0
 S.autopilot    = False
-S.ap_cmd       = {"throttle": 0.0, "pitch": 0.0, "roll": 0.0}
+S.ap_cmd       = {"throttle": 0.0, "v1": 0.0, "v2": 0.0, "v3": 0.0, "v4": 0.0}
+S.vane_cmd     = [0.0, 0.0, 0.0, 0.0]
 S.running = True
 
 # Connect to the MQTT broker (telemetry out + autopilot commands in).
