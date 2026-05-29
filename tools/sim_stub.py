@@ -35,6 +35,7 @@ GE_HEIGHT_SCALE = 0.30
 PROP_TORQUE_K = 0.004
 YAW_INERTIA = 0.04
 YAW_DRAG_K = 0.50
+VANE_ARM = 0.13   # moment arm [m] for vane yaw torque
 
 
 def _clamp(v, lo, hi):
@@ -57,9 +58,11 @@ class SimStub:
         self.z = max(self.z, ground_z + coll_offset)
 
     def step(self, cmd: Command, dt: float) -> Telemetry:
-        # ── Vane angles (autopilot sets them directly, clamped) ───────────────
-        ap = _clamp(cmd.pitch, -MAX_RAD, MAX_RAD)
-        ar = _clamp(cmd.roll, -MAX_RAD, MAX_RAD)
+        # ── Four independent vane angles (clamped to the limit) ───────────────
+        d1 = _clamp(cmd.vane1, -MAX_RAD, MAX_RAD)
+        d2 = _clamp(cmd.vane2, -MAX_RAD, MAX_RAD)
+        d3 = _clamp(cmd.vane3, -MAX_RAD, MAX_RAD)
+        d4 = _clamp(cmd.vane4, -MAX_RAD, MAX_RAD)
 
         # ── Propeller: ramp toward the commanded throttle fraction ────────────
         target_speed = _clamp(cmd.throttle, 0.0, 1.0) * PROP_MAX_SPEED
@@ -76,10 +79,15 @@ class SimStub:
         v_ind = math.sqrt(t_prop / VANE_COEFF) if t_prop > 0 else 0.0
         v_desc = max(0.0, -self.vz)
         v_eff_sq = v_ind ** 2 + v_desc ** 2
-
         f_lat = VANE_COEFF * v_eff_sq
-        fx_body = -f_lat * math.sin(ap)
-        fy_body = f_lat * math.sin(ar)
+
+        # Four independent vanes (matches blender-navigatio.py). d1..d4 are the
+        # raw vane angles a1..a4. Vanes 1 & 3 (N/S) make fore/aft force, 2 & 4
+        # (E/W) lateral. Their differential makes a net yaw torque (see below).
+        ap = 0.5 * (d1 + d3)   # effective pitch (N/S pair mean)
+        ar = 0.5 * (d2 + d4)   # effective roll  (E/W pair mean)
+        fx_body = -0.5 * f_lat * (math.sin(d1) + math.sin(d3))
+        fy_body = 0.5 * f_lat * (math.sin(d2) + math.sin(d4))
         cy, sy = math.cos(self.yaw), math.sin(self.yaw)
         fx = fx_body * cy - fy_body * sy
         fy = fx_body * sy + fy_body * cy
@@ -98,10 +106,15 @@ class SimStub:
         self.y += self.vy * dt
         self.z += self.vz * dt
 
-        # ── Reactive-torque yaw ───────────────────────────────────────────────
+        # ── Yaw: prop reaction + vane swirl torque + damping ──────────────────
+        # Q_vane = arm·F_lat·[(sin a1 − sin a3) + (sin a2 − sin a4)] — the vane
+        # differential. Equal-and-opposite vane pairs (a1>0,a3<0,a2>0,a4<0) make
+        # a net Z torque, which is how independent vanes now control yaw.
         q_react = -PROP_TORQUE_K * t_prop
+        q_vane = VANE_ARM * f_lat * ((math.sin(d1) - math.sin(d3)) +
+                                     (math.sin(d2) - math.sin(d4)))
         q_damp = -YAW_DRAG_K * self.yaw_vel
-        self.yaw_vel += (q_react + q_damp) / YAW_INERTIA * dt
+        self.yaw_vel += (q_react + q_vane + q_damp) / YAW_INERTIA * dt
         self.yaw += self.yaw_vel * dt
 
         # ── Ground collision ──────────────────────────────────────────────────
