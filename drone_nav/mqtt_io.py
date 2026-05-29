@@ -7,6 +7,7 @@ read a consistent snapshot without blocking.
 
 from __future__ import annotations
 
+import json
 import threading
 from typing import Optional
 
@@ -21,6 +22,7 @@ class MqttLink:
         self.cfg = cfg
         self._lock = threading.Lock()
         self._latest: Optional[Telemetry] = None
+        self._vanes = (0.0, 0.0, 0.0, 0.0)   # latest raw vane angles (rad)
         self._connected = threading.Event()
         self.last_error: Optional[str] = None
 
@@ -53,6 +55,7 @@ class MqttLink:
     # ── callbacks ────────────────────────────────────────────────────────────────
     def _on_connect(self, client, userdata, flags, reason_code, properties=None):
         client.subscribe(self.cfg.topic_telemetry)
+        client.subscribe(self.cfg.topic_vane_input)
         self._connected.set()
 
     def _on_message(self, client, userdata, msg):
@@ -63,14 +66,49 @@ class MqttLink:
                 return
             with self._lock:
                 self._latest = tlm
+        elif msg.topic == self.cfg.topic_vane_input:
+            vanes = _parse_vanes(msg.payload)
+            if vanes is not None:
+                with self._lock:
+                    self._vanes = vanes
 
     # ── data access ──────────────────────────────────────────────────────────────
     def latest_telemetry(self) -> Optional[Telemetry]:
         with self._lock:
             return self._latest
 
+    def latest_vanes(self) -> tuple:
+        """Most recent raw vane angles (vane1..vane4); zeros until one arrives."""
+        with self._lock:
+            return self._vanes
+
     def publish_command(self, cmd: Command) -> None:
         self._client.publish(self.cfg.topic_command, cmd.to_json())
 
     def publish_status(self, text: str) -> None:
         self._client.publish(self.cfg.topic_status, text)
+
+
+def _parse_vanes(payload) -> Optional[tuple]:
+    """Parse a raw vane-input message into (v1, v2, v3, v4) radians.
+
+    Accepts either an object {"vane1":..,"vane2":..,..} (also v1/v2/.. aliases)
+    or a 4-element list [v1, v2, v3, v4].
+    """
+    if isinstance(payload, (bytes, bytearray)):
+        payload = payload.decode("utf-8")
+    try:
+        data = json.loads(payload)
+    except (ValueError, TypeError):
+        return None
+    if isinstance(data, list) and len(data) >= 4:
+        return tuple(float(data[i]) for i in range(4))
+    if isinstance(data, dict):
+        def pick(*keys):
+            for k in keys:
+                if k in data:
+                    return float(data[k])
+            return 0.0
+        return (pick("vane1", "v1"), pick("vane2", "v2"),
+                pick("vane3", "v3"), pick("vane4", "v4"))
+    return None

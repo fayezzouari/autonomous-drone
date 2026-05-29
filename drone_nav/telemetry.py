@@ -66,15 +66,25 @@ class Telemetry:
 class Command:
     """Autopilot inputs consumed by the sim bridge.
 
-    ``throttle`` is a fraction [0, 1] of full prop speed; ``pitch`` and
-    ``roll`` are vane deflection *angles in radians* (the sim clamps them to
-    its own ±MAX_DEG limit). ``pitch`` drives Vanes 1-3, ``roll`` Vanes 2-4 —
-    matching the sim's body-frame force convention.
+    ``throttle`` is a fraction [0, 1] of full prop speed. ``vane1``…``vane4``
+    are the four *independent* vane deflection angles in radians — each vane
+    moves to its own angle (the sim clamps them to its ±MAX_DEG limit). No
+    mixing is applied: whatever you put here is applied vane-for-vane.
+
+    Geometry (mirrors the sim's force convention):
+        vane1, vane3  → on the X arm → fore/aft (body-X) force
+        vane2, vane4  → on the Y arm → lateral (body-Y) force
     """
 
     throttle: float = 0.0
-    pitch: float = 0.0   # radians, body-frame fore/aft vane
-    roll: float = 0.0    # radians, body-frame lateral vane
+    vane1: float = 0.0   # radians
+    vane2: float = 0.0
+    vane3: float = 0.0
+    vane4: float = 0.0
+
+    @property
+    def vanes(self) -> tuple:
+        return (self.vane1, self.vane2, self.vane3, self.vane4)
 
     def to_json(self) -> str:
         return json.dumps(asdict(self))
