@@ -2,7 +2,7 @@
 # Mirror the constants in blender-navigatio.py. Change them here ONLY if you also
 # change them in the sim, so the controller's thrust model stays valid.
 drone:
-  mass: 0.70           # kg
+  mass: 0.45           # kg  (measured real airframe)
   gravity: 9.81        # m/s^2
   thrust_max: 15.0     # N at full prop speed
   prop_max_speed: 720.0  # deg/s
@@ -68,15 +68,51 @@ mission:
   hold_time: 1.0           # s sustained inside the arrival window
   loop: false
 
+# ── Manual gamepad (drone-teleop) control ────────────────────────────────────────
+# Maps PS4 sticks -> vanes + throttle. Right stick = pitch/roll, left stick X = yaw,
+# left stick Y = throttle (or climb rate with altitude-hold on).
+manual:
+  deadzone: 0.08         # stick deadzone (fraction)
+  expo: 0.30             # 0 linear .. 1 softer around centre
+  throttle_rate: 0.6     # throttle units/s while Triangle(up)/Cross(down) held
+  tilt_frac: 1.0         # fraction of max vane deflection a full stick commands
+  yaw_rate_max: 1.2      # rad/s at full yaw stick
+  yaw_swirl_frac: 0.6    # fraction of max vane deflection used for yaw swirl
+  climb_rate_max: 2.0    # m/s at full throttle stick (altitude-hold mode)
+  altitude_hold_default: false
+  yaw:                   # heading-hold PID (swirl deflection)
+    kp: 1.5
+    ki: 0.0
+    kd: 0.1
+    out_min: -0.384      # ±22°
+    out_max: 0.384
+
+# ── Servo / ESC output mapping (PC -> ESP32) ──────────────────────────────────────
+# Vane deflection (rad, neutral 0) -> logical servo angle (deg). 90 = neutral; the
+# angle is hard-clamped to the [40, 160] rotation limit. The ESP32 then applies its
+# own per-pin trim on top. gain_deg_per_rad: leave blank to auto-fit to the limit.
+servo:
+  neutral_deg: 90.0
+  min_deg: 40.0          # vane rotation limit (min)
+  max_deg: 160.0         # vane rotation limit (max)
+  # gain_deg_per_rad: 100.0
+  esc_min_throttle: 0.0  # ESC idle floor sent at zero stick
+  # Vanes 3 & 4 face opposite their pair-mate (v1, v2), so flip them: combined
+  # with the pair-together mixing this gives s3 = 180 - s1 and s4 = 180 - s2
+  # (e.g. s1=120 -> s3=60) for every input. Order [v1, v2, v3, v4].
+  reverse: [false, false, true, true]
+
 # ── MQTT transport ──────────────────────────────────────────────────────────────
 mqtt:
-  host: localhost        # broker (mosquitto) location
+  host: 10.243.245.93    # broker (mosquitto) location — same LAN IP the ESP32 uses
   port: 1883
   # username: myuser
   # password: mypass
   client_id: drone-nav
   keepalive: 30
   topic_telemetry: drone/telemetry   # sim -> nav
-  topic_command: drone/cmd           # nav -> sim  (throttle + 4 vane angles)
+  topic_command: drone/cmd           # nav -> sim  (throttle + 4 vane angles, rad)
   topic_vane_input: drone/vanes      # external -> nav (raw vane angles)
   topic_status: drone/status         # nav -> world
+  topic_imu: drone/imu               # ESP32 IMU -> nav (orientation)
+  topic_hw_cmd: drone/hw             # nav -> ESP32 (servo degrees + ESC)
