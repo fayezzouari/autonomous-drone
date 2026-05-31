@@ -49,7 +49,7 @@ FPS            = 60
 # ── Physics tuning ────────────────────────────────────────────────────────────
 # Mass breakdown: airframe 0.30 kg · motor 0.10 kg · servos×3 0.05 kg
 #                 battery  0.20 kg · prop+misc 0.05 kg  → total 0.70 kg
-MASS        = 0.70   # kg
+MASS        = 0.42   # kg
 GRAVITY     = 9.81   # m/s²
 THRUST_MAX  = 15.0   # N at full prop speed  (hover ≈ 68% throttle)
 RESTITUTION_BASE  = 0.12   # minimum energy return on ground contact
