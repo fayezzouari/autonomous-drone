@@ -57,6 +57,9 @@ except ImportError:  # pragma: no cover - guidance only
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "config.yaml"
 BROADCAST_HZ = 50.0
+# Real-hardware topics (a flight controller / IMU rig publishes these).
+TOPIC_IMU = "drone/imu"   # {t, yaw, pitch, roll, gz}  Euler degrees + gyro-Z
+TOPIC_HW = "drone/hw"     # {throttle, s1, s2, s3, s4}  throttle + 4 servo angles
 
 
 class SharedState:
@@ -72,8 +75,11 @@ class SharedState:
         self.command = Command()
         self.status = "idle"
         self.pid: Optional[dict] = None  # {"alt": {p,i,d,out,setpoint,measurement}}
+        self.imu: Optional[dict] = None  # {t, yaw, pitch, roll, gz}  (degrees)
+        self.hw: Optional[dict] = None   # {throttle, s1, s2, s3, s4}
 
-    def update(self, *, telemetry=None, command=None, status=None, pid=...):
+    def update(self, *, telemetry=None, command=None, status=None,
+               pid=..., imu=None, hw=None):
         with self._lock:
             if telemetry is not None:
                 self.telemetry = telemetry
@@ -83,6 +89,10 @@ class SharedState:
                 self.status = status
             if pid is not ...:
                 self.pid = pid
+            if imu is not None:
+                self.imu = imu
+            if hw is not None:
+                self.hw = hw
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -92,6 +102,8 @@ class SharedState:
                 "command": asdict(self.command),
                 "status": self.status,
                 "pid": self.pid,
+                "imu": self.imu,
+                "hw": self.hw,
             }
 
 
@@ -114,16 +126,47 @@ def _meta_message(cfg: Config, source: str) -> dict:
     }
 
 
-# ── MQTT producer ──────────────────────────────────────────────────────────────
-def start_mqtt(cfg: Config, state: SharedState) -> "object":
-    """Subscribe to telemetry/cmd/status and feed SharedState. Returns the client."""
+# ── MQTT producers ───────────────────────────────────────────────────────────
+def _new_client(client_id: str):
     import paho.mqtt.client as mqtt
-
     try:
-        client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="web-bridge")
+        return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=client_id)
     except (AttributeError, TypeError):  # paho 1.x
-        client = mqtt.Client(client_id="web-bridge")
+        return mqtt.Client(client_id=client_id)
 
+
+def _handle_imu_hw(topic: str, payload, state: SharedState) -> bool:
+    """Route an IMU / HW message into SharedState. Returns True if handled."""
+    if topic == TOPIC_IMU:
+        try:
+            d = json.loads(payload)
+            state.update(imu={
+                "t": float(d.get("t", 0.0)),
+                "yaw": float(d.get("yaw", 0.0)),
+                "pitch": float(d.get("pitch", 0.0)),
+                "roll": float(d.get("roll", 0.0)),
+                "gz": float(d.get("gz", 0.0)),
+            })
+        except (ValueError, TypeError):
+            pass
+        return True
+    if topic == TOPIC_HW:
+        try:
+            d = json.loads(payload)
+            state.update(hw={
+                "throttle": float(d.get("throttle", 0.0)),
+                "s1": float(d.get("s1", 0.0)), "s2": float(d.get("s2", 0.0)),
+                "s3": float(d.get("s3", 0.0)), "s4": float(d.get("s4", 0.0)),
+            })
+        except (ValueError, TypeError):
+            pass
+        return True
+    return False
+
+
+def start_mqtt(cfg: Config, state: SharedState, with_imu: bool = True) -> "object":
+    """Subscribe to telemetry/cmd/status (+ imu/hw) and feed SharedState."""
+    client = _new_client("web-bridge")
     if cfg.mqtt.username:
         client.username_pw_set(cfg.mqtt.username, cfg.mqtt.password)
 
@@ -131,11 +174,18 @@ def start_mqtt(cfg: Config, state: SharedState) -> "object":
         c.subscribe(cfg.mqtt.topic_telemetry)
         c.subscribe(cfg.mqtt.topic_command)
         c.subscribe(cfg.mqtt.topic_status)
+        extra = ""
+        if with_imu:
+            c.subscribe(TOPIC_IMU)
+            c.subscribe(TOPIC_HW)
+            extra = "/imu/hw"
         print(f"[web-bridge] MQTT connected to {cfg.mqtt.host}:{cfg.mqtt.port}; "
-              f"subscribed to telemetry/cmd/status")
+              f"subscribed to telemetry/cmd/status{extra}")
 
     def on_message(c, u, msg):
         topic = msg.topic
+        if with_imu and _handle_imu_hw(topic, msg.payload, state):
+            return
         if topic == cfg.mqtt.topic_telemetry:
             try:
                 tlm = Telemetry.from_json(msg.payload)
@@ -170,6 +220,27 @@ def start_mqtt(cfg: Config, state: SharedState) -> "object":
     client.on_connect = on_connect
     client.on_message = on_message
     client.connect(cfg.mqtt.host, cfg.mqtt.port, cfg.mqtt.keepalive)
+    client.loop_start()
+    return client
+
+
+def start_imu_mqtt(host: str, port: int, state: SharedState) -> "object":
+    """Connect to a *separate* broker that carries only imu/hw (e.g. the real
+    flight controller), and feed SharedState. Returns the client."""
+    client = _new_client("web-bridge-imu")
+
+    def on_connect(c, u, flags, rc, properties=None):
+        c.subscribe(TOPIC_IMU)
+        c.subscribe(TOPIC_HW)
+        print(f"[web-bridge] IMU MQTT connected to {host}:{port}; "
+              f"subscribed to imu/hw")
+
+    def on_message(c, u, msg):
+        _handle_imu_hw(msg.topic, msg.payload, state)
+
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(host, port, 30)
     client.loop_start()
     return client
 
@@ -261,6 +332,10 @@ def main(argv=None) -> int:
                       help="run in-process physics, no broker/Blender needed")
     ap.add_argument("--host", default=None, help="MQTT broker host (overrides config)")
     ap.add_argument("--port", type=int, default=None, help="MQTT broker port")
+    ap.add_argument("--imu-host", default=None,
+                    help="separate broker carrying drone/imu + drone/hw "
+                         "(e.g. a real flight controller). Defaults to --host.")
+    ap.add_argument("--imu-port", type=int, default=1883, help="IMU broker port")
     ap.add_argument("--ws-host", default="0.0.0.0", help="WebSocket bind host")
     ap.add_argument("--ws-port", type=int, default=8765, help="WebSocket bind port")
     args = ap.parse_args(argv)
@@ -278,15 +353,25 @@ def main(argv=None) -> int:
     asyncio.set_event_loop(loop)
 
     mqtt_client = None
+    imu_client = None
     if args.demo:
         start_demo(cfg, state, loop)
     else:
+        # If a separate IMU broker is given, the main client skips imu/hw and a
+        # second client handles them; otherwise the main client does both.
+        separate_imu = bool(args.imu_host) and args.imu_host != cfg.mqtt.host
         try:
-            mqtt_client = start_mqtt(cfg, state)
+            mqtt_client = start_mqtt(cfg, state, with_imu=not separate_imu)
         except OSError as exc:
             print(f"[web-bridge] could not reach broker {cfg.mqtt.host}:{cfg.mqtt.port} "
                   f"— {exc}\n   (try --demo to run without a broker)")
             return 1
+        if separate_imu:
+            try:
+                imu_client = start_imu_mqtt(args.imu_host, args.imu_port, state)
+            except OSError as exc:
+                print(f"[web-bridge] could not reach IMU broker "
+                      f"{args.imu_host}:{args.imu_port} — {exc}")
 
     try:
         loop.run_until_complete(
@@ -294,9 +379,10 @@ def main(argv=None) -> int:
     except KeyboardInterrupt:
         print("\n[web-bridge] shutting down.")
     finally:
-        if mqtt_client is not None:
-            mqtt_client.loop_stop()
-            mqtt_client.disconnect()
+        for cl in (mqtt_client, imu_client):
+            if cl is not None:
+                cl.loop_stop()
+                cl.disconnect()
     return 0
 
 
