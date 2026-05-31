@@ -2,13 +2,13 @@
 # Mirror the constants in blender-navigatio.py. Change them here ONLY if you also
 # change them in the sim, so the controller's thrust model stays valid.
 drone:
-  mass: 0.45           # kg  (measured real airframe)
+  mass: 0.42           # kg  (measured real airframe)
   gravity: 9.81        # m/s^2
   thrust_max: 15.0     # N at full prop speed
   prop_max_speed: 720.0  # deg/s
   max_vane_deg: 28.0   # max vane deflection
   rho_air: 1.225
-  rotor_radius: 0.15
+  rotor_radius: 0.75
 
 # ── Altitude control ────────────────────────────────────────────────────────────
 # The controller holds this altitude via a PID on throttle. Steering is manual:
@@ -80,10 +80,16 @@ manual:
   yaw_swirl_frac: 0.6    # fraction of max vane deflection used for yaw swirl
   climb_rate_max: 2.0    # m/s at full throttle stick (altitude-hold mode)
   altitude_hold_default: false
-  yaw:                   # heading-hold PID (swirl deflection)
-    kp: 1.5
-    ki: 0.0
+  # Feedforward anti-torque swirl (rad) that cancels the prop's reaction torque
+  # so the airframe doesn't spin up. Ramped in with throttle. BENCH-TUNE on hw:
+  # increase until a hovering drone holds heading hands-off; flip the sign if it
+  # spins the wrong way. 0 disables (falls back to the heading-hold PID alone).
+  yaw_antitorque: 0.008
+  yaw:                   # heading-hold: kp on error, ki = anti-torque trim,
+    kp: 1.5              # kd damps the measured yaw rate (gz)
+    ki: 0.4              # integral trim — nulls residual spin the FF misses
     kd: 0.1
+    i_limit: 0.2         # cap trim swirl (rad), within the ±max_swirl budget
     out_min: -0.384      # ±22°
     out_max: 0.384
 
@@ -104,7 +110,7 @@ servo:
 
 # ── MQTT transport ──────────────────────────────────────────────────────────────
 mqtt:
-  host: 10.243.245.93    # broker (mosquitto) location — same LAN IP the ESP32 uses
+  host: 192.168.1.184    # broker (mosquitto) location — same LAN IP the ESP32 uses
   port: 1883
   # username: myuser
   # password: mypass
