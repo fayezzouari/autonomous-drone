@@ -16,7 +16,7 @@ import math
 from drone_nav.telemetry import Command, Telemetry
 
 # Constants copied from blender-navigatio.py
-MASS = 0.70
+MASS = 0.42
 GRAVITY = 9.81
 THRUST_MAX = 15.0
 PROP_MAX_SPEED = 720.0
@@ -25,7 +25,7 @@ MAX_RAD = math.radians(MAX_DEG)
 PROP_ACCEL = 1500.0
 PROP_DECEL = 120.0
 RHO_AIR = 1.225
-ROTOR_RADIUS = 0.15
+ROTOR_RADIUS = 0.075
 ROTOR_AREA = math.pi * ROTOR_RADIUS ** 2
 VANE_COEFF = 2.0 * RHO_AIR * ROTOR_AREA
 DRAG_LIN = 0.15
@@ -136,5 +136,5 @@ class SimStub:
         return Telemetry(
             t=self.t, x=self.x, y=self.y, z=self.z,
             vx=self.vx, vy=self.vy, vz=self.vz,
-            yaw=self.yaw, prop_speed=self.prop_speed,
+            yaw=self.yaw, gz=self.yaw_vel, prop_speed=self.prop_speed,
         )
