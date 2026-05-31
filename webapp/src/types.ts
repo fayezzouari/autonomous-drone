@@ -36,12 +36,32 @@ export interface PidBlock {
   alt: PidTerm;
 }
 
+// Real flight-controller attitude, from drone/imu (Euler degrees + gyro-Z rate).
+export interface Imu {
+  t: number;
+  yaw: number;
+  pitch: number;
+  roll: number;
+  gz: number;
+}
+
+// Real hardware actuator state, from drone/hw (throttle + 4 servo angles, deg).
+export interface Hw {
+  throttle: number;
+  s1: number;
+  s2: number;
+  s3: number;
+  s4: number;
+}
+
 export interface StateMsg {
   type: "state";
   telemetry: Telemetry;
   command: Command;
   status: string;
   pid: PidBlock | null;
+  imu: Imu | null;
+  hw: Hw | null;
 }
 
 export interface MetaMsg {
@@ -82,4 +102,9 @@ export interface HistorySample {
   altD: number;
   altOut: number;
   altSp: number; // climb-rate setpoint (m/s)
+  // real IMU attitude (degrees) + gyro-Z (NaN when no IMU stream)
+  imuYaw: number;
+  imuPitch: number;
+  imuRoll: number;
+  gz: number;
 }

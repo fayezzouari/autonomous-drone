@@ -27,6 +27,7 @@ class SimStore {
   status = "connecting…";
   source: "demo" | "mqtt" | "—" = "—";
   hasPid = false;
+  hasImu = false;
 
   private listeners = new Set<Listener>();
   private ws: WebSocket | null = null;
@@ -84,8 +85,10 @@ class SimStore {
     this.latest = msg;
     this.pushHistory(msg);
     const hadPid = this.hasPid;
+    const hadImu = this.hasImu;
     this.hasPid = msg.pid != null;
-    if (msg.status !== this.status || hadPid !== this.hasPid) {
+    this.hasImu = msg.imu != null;
+    if (msg.status !== this.status || hadPid !== this.hasPid || hadImu !== this.hasImu) {
       this.status = msg.status;
       this.bump();
     }
@@ -110,6 +113,10 @@ class SimStore {
       altD: alt?.d ?? NaN,
       altOut: alt?.out ?? NaN,
       altSp: alt?.setpoint ?? NaN,
+      imuYaw: s.imu?.yaw ?? NaN,
+      imuPitch: s.imu?.pitch ?? NaN,
+      imuRoll: s.imu?.roll ?? NaN,
+      gz: s.imu?.gz ?? NaN,
     };
     const h = this.history;
     h.push(sample);
@@ -130,6 +137,7 @@ class SimStore {
       source: this.source,
       meta: this.meta,
       hasPid: this.hasPid,
+      hasImu: this.hasImu,
     };
   }
   private bump() {

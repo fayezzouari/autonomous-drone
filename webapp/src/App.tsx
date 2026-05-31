@@ -1,9 +1,23 @@
 import { useEffect } from "react";
+import { Route, Routes } from "react-router-dom";
 import TopBar from "./components/TopBar";
 import SimulationViewport from "./components/SimulationViewport";
 import ComponentMap from "./components/ComponentMap";
 import Visualizations from "./components/Visualizations";
+import ImuView from "./components/ImuView";
 import { store } from "./store";
+
+function DashboardPage() {
+  return (
+    <>
+      <div className="stage">
+        <SimulationViewport />
+        <ComponentMap />
+      </div>
+      <Visualizations />
+    </>
+  );
+}
 
 export default function App() {
   useEffect(() => {
@@ -13,11 +27,10 @@ export default function App() {
   return (
     <div className="app">
       <TopBar />
-      <div className="stage">
-        <SimulationViewport />
-        <ComponentMap />
-      </div>
-      <Visualizations />
+      <Routes>
+        <Route path="/" element={<DashboardPage />} />
+        <Route path="/position" element={<ImuView />} />
+      </Routes>
     </div>
   );
 }

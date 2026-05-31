@@ -12,6 +12,10 @@ import { useSimSnapshot } from "../hooks";
 import CanvasBoundary from "./CanvasBoundary";
 
 const MAX_RAD = (MAX_DEG * Math.PI) / 180;
+const DEG = Math.PI / 180;
+// Where to float the twin when there is no position source (real-hardware manual
+// flight has no GPS/VICON), so the live IMU attitude stays clearly in view.
+const DISPLAY_HOVER_Z = 1.5;
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 function FlyingDrone() {
@@ -19,6 +23,15 @@ function FlyingDrone() {
   const body = useRef<THREE.Group>(null); // yaw + lean
   const copter = useRef<CopterRefs>(null);
   const tilt = useRef({ x: 0, y: 0 });
+
+  // attitude quaternion scratch (used when a real IMU drives the orientation)
+  const Z = useMemo(() => new THREE.Vector3(0, 0, 1), []);
+  const Y = useMemo(() => new THREE.Vector3(0, 1, 0), []);
+  const X = useMemo(() => new THREE.Vector3(1, 0, 0), []);
+  const qy = useMemo(() => new THREE.Quaternion(), []);
+  const qp = useMemo(() => new THREE.Quaternion(), []);
+  const qr = useMemo(() => new THREE.Quaternion(), []);
+  const qTarget = useMemo(() => new THREE.Quaternion(), []);
 
   // vector overlays (created once)
   const vel = useMemo(() => new THREE.ArrowHelper(new THREE.Vector3(0, 0, 1), new THREE.Vector3(), 0.001, COLOR.velocity, 0.12, 0.07), []);
@@ -30,25 +43,47 @@ function FlyingDrone() {
     const c = copter.current;
     if (!s || !root.current || !body.current || !c) return;
     const dt = Math.min(dtRaw, 0.05);
-    const t = s.telemetry, cmd = s.command;
+    const t = s.telemetry, cmd = s.command, imu = s.imu;
+    // A sim / position source is publishing real telemetry (sim time advances);
+    // on real-hardware manual flight there is none, only IMU + commands.
+    const hasTelem = t.t > 0;
 
-    root.current.position.set(t.x, t.y, t.z);
+    // ── position ──────────────────────────────────────────────────────────────
+    if (!hasTelem && (imu || s.hw)) {
+      root.current.position.set(0, 0, DISPLAY_HOVER_Z); // hardware: no position sensor
+    } else {
+      root.current.position.set(t.x, t.y, t.z);
+    }
 
-    // velocity lean in body frame (mirror of the sim)
+    // ── attitude ──────────────────────────────────────────────────────────────
     const cy = Math.cos(t.yaw), sy = Math.sin(t.yaw);
-    const vxb = t.vx * cy + t.vy * sy;
-    const vyb = -t.vx * sy + t.vy * cy;
-    const tgtX = clamp(-vyb * TILT_FACTOR, -TILT_MAX, TILT_MAX);
-    const tgtY = clamp(vxb * TILT_FACTOR, -TILT_MAX, TILT_MAX);
-    const a = Math.min(1, TILT_SMOOTH * dt);
-    tilt.current.x += (tgtX - tilt.current.x) * a;
-    tilt.current.y += (tgtY - tilt.current.y) * a;
-    body.current.rotation.set(tilt.current.x, tilt.current.y, t.yaw);
+    if (imu) {
+      // real flight-controller attitude (aerospace ZYX): world = Rz·Ry·Rx
+      qy.setFromAxisAngle(Z, imu.yaw * DEG);
+      qp.setFromAxisAngle(Y, imu.pitch * DEG);
+      qr.setFromAxisAngle(X, imu.roll * DEG);
+      qTarget.copy(qy).multiply(qp).multiply(qr);
+      body.current.quaternion.slerp(qTarget, 1 - Math.exp(-dt * 18));
+    } else {
+      // sim: velocity lean in body frame + telemetry yaw
+      const vxb = t.vx * cy + t.vy * sy;
+      const vyb = -t.vx * sy + t.vy * cy;
+      const tgtX = clamp(-vyb * TILT_FACTOR, -TILT_MAX, TILT_MAX);
+      const tgtY = clamp(vxb * TILT_FACTOR, -TILT_MAX, TILT_MAX);
+      const a = Math.min(1, TILT_SMOOTH * dt);
+      tilt.current.x += (tgtX - tilt.current.x) * a;
+      tilt.current.y += (tgtY - tilt.current.y) * a;
+      body.current.rotation.set(tilt.current.x, tilt.current.y, t.yaw);
+    }
 
-    // prop spin + glow
-    const propFrac = t.prop_speed / PROP_MAX_SPEED;
+    // prop spin + glow — hardware sends no prop_speed, so drive the rotor from
+    // throttle (drone/hw, else the command) so the disc still reacts to the stick.
+    const thr = s.hw?.throttle ?? cmd.throttle;
+    let propSpeed = t.prop_speed; // deg/s
+    if (propSpeed < 1 && !hasTelem) propSpeed = clamp(thr, 0, 1) * PROP_MAX_SPEED;
+    const propFrac = propSpeed / PROP_MAX_SPEED;
     const thrustFrac = propFrac * propFrac;
-    if (c.prop) c.prop.rotation.z += (t.prop_speed * PROP_VISUAL_MULT * dt * Math.PI) / 180;
+    if (c.prop) c.prop.rotation.z += (propSpeed * PROP_VISUAL_MULT * dt * Math.PI) / 180;
     c.matProp.emissiveIntensity = 0.08 + 0.6 * propFrac;
     c.discMat.opacity = 0.04 + 0.16 * thrustFrac;
 
@@ -114,7 +149,7 @@ function Trail() {
 
   useFrame((_, dt) => {
     const s = store.latest;
-    if (!s) return;
+    if (!s || s.telemetry.t <= 0) return; // only trace when a position source is live
     acc.current += dt;
     if (acc.current < 0.04) return;
     acc.current = 0;

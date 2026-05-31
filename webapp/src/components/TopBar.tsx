@@ -1,3 +1,4 @@
+import { NavLink } from "react-router-dom";
 import { useSimSnapshot } from "../hooks";
 import { store } from "../store";
 
@@ -13,6 +14,15 @@ export default function TopBar() {
           <div className="sub">3D digital twin · component map · telemetry &amp; PID profiling</div>
         </div>
       </div>
+      <nav className="nav">
+        <NavLink to="/" end className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}>
+          Dashboard
+        </NavLink>
+        <NavLink to="/position" className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}>
+          Position
+          <span className={"nav-dot" + (snap.hasImu ? " on" : "")} />
+        </NavLink>
+      </nav>
       <div className="topbar-right">
         <span className="pill">
           source <code>{snap.source}</code>

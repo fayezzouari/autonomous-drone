@@ -263,6 +263,74 @@ body {
 .chart-legend .v { font-family: var(--mono); color: var(--fg); }
 .chart-body { padding: 6px 8px 4px; }
 
+/* ── nav (dashboard / imu) ───────────────────────────────────────────────── */
+.nav {
+  display: flex;
+  gap: 4px;
+  margin-left: 8px;
+}
+.nav-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--fg-dim);
+  text-decoration: none;
+  padding: 6px 12px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+}
+.nav-link:hover { color: var(--fg); background: var(--bg-elev); }
+.nav-link.active { color: var(--fg); background: var(--bg-elev); border-color: var(--border); }
+.nav-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted); }
+.nav-dot.on { background: var(--green); box-shadow: 0 0 6px var(--green); }
+
+/* ── attitude indicator (artificial horizon) ─────────────────────────────── */
+.adi-wrap { display: grid; place-items: center; padding: 22px 0 8px; }
+.adi {
+  position: relative;
+  width: 196px; height: 196px;
+  border-radius: 50%;
+  overflow: hidden;
+  background: #000;
+  box-shadow: 0 0 0 1px var(--border-strong), inset 0 0 24px rgba(0,0,0,0.7);
+}
+.adi-ball {
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 320px; height: 520px;
+  transform: translate(-50%, -50%);
+  will-change: transform;
+}
+.adi-sky { position: absolute; top: 0; left: 0; right: 0; height: 50%; background: linear-gradient(#3b86d6, #1d4f80); }
+.adi-ground { position: absolute; bottom: 0; left: 0; right: 0; height: 50%; background: linear-gradient(#5a3c22, #3a2614); }
+.adi-horizon { position: absolute; top: 50%; left: 0; right: 0; height: 2px; background: rgba(255,255,255,0.9); transform: translateY(-1px); }
+.adi-fixed {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 4px;
+  pointer-events: none;
+}
+.adi-fixed .adi-wing { width: 34px; height: 3px; background: var(--amber); border-radius: 2px; box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.adi-fixed .adi-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.adi-bezel { position: absolute; inset: 0; border-radius: 50%; box-shadow: inset 0 0 0 3px rgba(0,0,0,0.55); pointer-events: none; }
+.adi-bank { position: absolute; inset: 0; pointer-events: none; }
+.adi-bank-mark { position: absolute; top: 4px; left: 50%; width: 0; height: 0; transform: translateX(-50%); border-left: 5px solid transparent; border-right: 5px solid transparent; border-top: 8px solid var(--fg); }
+
+/* ── readouts grid ───────────────────────────────────────────────────────── */
+.readout-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--border);
+}
+.readout {
+  padding: 12px 14px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+.readout:nth-child(3n) { border-right: none; }
+.readout-k { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--fg-muted); }
+.readout-v { font-family: var(--mono); font-size: 20px; color: var(--fg); margin-top: 3px; }
+.readout-v small { font-size: 11px; color: var(--fg-muted); margin-left: 2px; }
+
 .notice {
   margin: 0 2px;
   padding: 10px 14px;
