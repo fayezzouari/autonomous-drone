@@ -640,6 +640,7 @@ def _publish_telemetry(S):
         "x":  S.phys_pos.x, "y":  S.phys_pos.y, "z":  S.phys_pos.z,
         "vx": S.phys_vel.x, "vy": S.phys_vel.y, "vz": S.phys_vel.z,
         "yaw": S.phys_yaw,
+        "gz": S.phys_yaw_vel,
         "prop_speed": S.prop_speed,
         # Actuator state, so a remote viewer (the web twin) mirrors the vanes
         # and throttle under ANY control source — autopilot or manual gamepad/
