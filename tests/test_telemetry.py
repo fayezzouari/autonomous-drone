@@ -28,7 +28,7 @@ def test_telemetry_tolerates_unknown_keys():
 
 def test_bridge_telemetry_keys_match_dataclass():
     # These are exactly the keys the Blender bridge publishes (_publish_telemetry).
-    bridge_keys = {"t", "x", "y", "z", "vx", "vy", "vz", "yaw", "prop_speed"}
+    bridge_keys = {"t", "x", "y", "z", "vx", "vy", "vz", "yaw", "gz", "prop_speed"}
     assert bridge_keys == set(Telemetry().__dataclass_fields__)
 
 
