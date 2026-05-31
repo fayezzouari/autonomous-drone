@@ -59,6 +59,48 @@ class ControlConfig:
         kp=4.0, ki=2.0, kd=0.2, out_min=-8.0, out_max=8.0, i_limit=6.0))
 
 
+# ── Manual gamepad (teleop) control ─────────────────────────────────────────────
+@dataclass
+class ManualConfig:
+    """Maps PS4 stick inputs to vane/throttle commands.
+
+    Right stick → pitch/roll (translation), left stick X → yaw rate, left stick Y
+    → throttle (direct) or climb rate (when altitude-hold is on). A yaw PID holds
+    the last heading whenever the yaw stick is centred.
+    """
+    deadzone: float = 0.08          # stick deadzone (fraction of full travel)
+    expo: float = 0.30              # 0 = linear, →1 = softer around centre
+    throttle_rate: float = 0.6      # throttle units/s while Triangle/Cross held
+    tilt_frac: float = 1.0          # fraction of max_vane_rad a full stick commands
+    yaw_rate_max: float = 1.2       # rad/s commanded by a full yaw stick
+    yaw_swirl_frac: float = 0.6     # fraction of max_vane_rad used for yaw swirl
+    climb_rate_max: float = 2.0     # m/s commanded by a full throttle stick (alt-hold)
+    altitude_hold_default: bool = False
+    yaw: PIDGains = field(default_factory=lambda: PIDGains(
+        kp=1.5, ki=0.0, kd=0.1, out_min=-0.384, out_max=0.384))  # ±22° swirl
+
+
+# ── Servo / ESC output mapping (PC → ESP32) ─────────────────────────────────────
+@dataclass
+class ServoConfig:
+    """Maps a vane deflection (rad, neutral 0) to a *logical* servo angle (deg).
+
+    Neutral deflection → ``neutral_deg``; the angle is hard-clamped to
+    ``[min_deg, max_deg]`` (the vane rotation limit). The ESP32 then applies its
+    own per-pin trim calibration on top of this logical angle. ``gain_deg_per_rad``
+    is auto-fitted (so a full ``max_vane_rad`` deflection reaches the nearer limit)
+    when left as ``None``.
+    """
+    neutral_deg: float = 90.0
+    min_deg: float = 40.0
+    max_deg: float = 160.0
+    gain_deg_per_rad: Optional[float] = None
+    esc_min_throttle: float = 0.0   # ESC idle floor (fraction) sent at zero stick
+    # Per-servo direction. The two servos on each arm are mirror-mounted, so one
+    # of each pair must be reversed. Order [v1, v2, v3, v4]; default flips v3 & v4.
+    reverse: List[bool] = field(default_factory=lambda: [False, False, True, True])
+
+
 # ── Autonomous point-to-point (A → B) control ──────────────────────────────────
 @dataclass
 class GotoConfig:
@@ -102,9 +144,11 @@ class MQTTConfig:
     client_id: str = "drone-nav"
     keepalive: int = 30
     topic_telemetry: str = "drone/telemetry"     # sim → nav
-    topic_command: str = "drone/cmd"             # nav → sim  (throttle + 4 vanes)
+    topic_command: str = "drone/cmd"             # nav → sim  (throttle + 4 vanes, rad)
     topic_vane_input: str = "drone/vanes"        # external → nav (raw vane angles)
     topic_status: str = "drone/status"           # nav → world
+    topic_imu: str = "drone/imu"                 # ESP32 IMU → nav (orientation)
+    topic_hw_cmd: str = "drone/hw"               # nav → ESP32 (servo deg + ESC)
 
 
 @dataclass
@@ -113,6 +157,8 @@ class Config:
     control: ControlConfig = field(default_factory=ControlConfig)
     goto: GotoConfig = field(default_factory=GotoConfig)
     mission: MissionConfig = field(default_factory=MissionConfig)
+    manual: ManualConfig = field(default_factory=ManualConfig)
+    servo: ServoConfig = field(default_factory=ServoConfig)
     mqtt: MQTTConfig = field(default_factory=MQTTConfig)
 
 
@@ -162,6 +208,23 @@ def load_config(path) -> Config:
         ms = raw["mission"]
         cfg.mission = MissionConfig(**{k: v for k, v in ms.items()
                                        if k in vars(MissionConfig())})
+    if "manual" in raw:
+        mn = raw["manual"]
+        cfg.manual = ManualConfig(
+            deadzone=mn.get("deadzone", cfg.manual.deadzone),
+            expo=mn.get("expo", cfg.manual.expo),
+            throttle_rate=mn.get("throttle_rate", cfg.manual.throttle_rate),
+            tilt_frac=mn.get("tilt_frac", cfg.manual.tilt_frac),
+            yaw_rate_max=mn.get("yaw_rate_max", cfg.manual.yaw_rate_max),
+            yaw_swirl_frac=mn.get("yaw_swirl_frac", cfg.manual.yaw_swirl_frac),
+            climb_rate_max=mn.get("climb_rate_max", cfg.manual.climb_rate_max),
+            altitude_hold_default=mn.get("altitude_hold_default",
+                                         cfg.manual.altitude_hold_default),
+            yaw=_pid_from_dict(mn.get("yaw", {}), cfg.manual.yaw),
+        )
+    if "servo" in raw:
+        cfg.servo = ServoConfig(**{k: v for k, v in raw["servo"].items()
+                                   if k in vars(ServoConfig())})
     if "mqtt" in raw:
         m = raw["mqtt"]
         cfg.mqtt = MQTTConfig(**{k: v for k, v in m.items()
