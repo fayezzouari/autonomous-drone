@@ -26,11 +26,16 @@ drone_nav/
   telemetry.py                  Telemetry / Command dataclasses (the MQTT wire format)
   pid.py                        reusable PID (anti-windup, derivative-on-measurement)
   controller.py                 altitude-hold controller (throttle PID)
-  mqtt_io.py                    paho-mqtt transport (telemetry + raw vane input)
+  mqtt_io.py                    paho-mqtt transport (telemetry + IMU + raw vanes + hw cmd)
   main.py                       entry point: altitude-hold + raw vanes (or --sim)
   vane_cmd.py                   `vane-cmd` CLI to publish raw vane angles
+  gamepad.py                    PS4/DS4 reader (pygame) → normalised StickState
+  manual_control.py             ManualPilot: sticks + telemetry → Command (PID)
+  servo_map.py                  Command (rad) → servo degrees [40,160] + ESC
+  teleop.py                     `drone-teleop`: PS4 manual flight (MQTT/hardware or --sim)
 sim_bridge/blender_sim_mqtt.py  the sim + MQTT autopilot (4 independent vanes) + telemetry
 tools/sim_stub.py               headless re-impl of the sim physics (for offline tests)
+firmware/drone_esp32/           ESP32-S3 actuator + IMU node (PlatformIO/Arduino, C++)
 tests/                          PID + altitude-hold + independent-vane physics tests
 blender-navigatio.py            original simulation (untouched reference)
 ```
@@ -114,11 +119,57 @@ uv run drone-nav --mission --verbose
 Tune the loops under `goto:` in `config.yaml`; set the A→B sequence under
 `mission.waypoints`.
 
+### 5. Manual flight with a PS4 controller (real hardware)
+
+A PS4 pad steers the singlecopter through an **ESP32-S3** that drives the four
+vane servos + the brushless ESC and streams its IMU back over MQTT.
+
+**Where does the pad connect? → the PC.** The PID stays in Python, so you keep
+live tuning, logging, and the same `config.yaml`. The ESP32 is a dumb
+actuator+sensor node, which matches your existing telemetry→command flow:
+
+```
+PS4 pad ─Bluetooth→ PC ── drone/hw (servo°+ESC) ──→ ESP32 ──→ 4 servos + ESC
+   (gamepad.py → ManualPilot PID → servo_map)          │
+        heading-hold ←── drone/imu (yaw) ──────────────┘ (MPU6050, SDA5/SCL4)
+```
+
+(The alternative — pad → ESP32 directly via Bluepad32 — would force the whole
+PID to be rewritten in C++ and abandons the Python stack. Only worth it if the
+drone must fly with the PC off.) Because control rides the Wi-Fi/MQTT link, the
+ESP32 **fails safe** — ESC to idle, vanes centred — if commands stop for 400 ms.
+
+```bash
+# try the controller + PID offline against the physics stub first (no hardware):
+uv sync --extra gamepad
+uv run drone-teleop --sim --verbose
+
+# discover your pad's axis/button indices if the mapping looks off:
+uv run python -m drone_nav.gamepad
+
+# fly the real drone (broker + flashed ESP32 running):
+uv run drone-teleop --verbose
+```
+
+Controls (DS4 defaults): the **right stick steers the vanes/servos** — Y = pitch
+(fore/aft), X = roll (lateral). The **left stick Y = throttle** (up ramps the
+brushless up, centre holds the level). **L1/R1 = yaw** left/right. **Options** =
+arm/disarm; **Circle** = altitude-hold; **PS** = kill. Vanes map to a logical
+servo angle centred at 90° and hard-clamped
+to the **[40°, 160°]** rotation limit; the ESP32 then applies per-pin trim. See
+`firmware/drone_esp32/README.md` for wiring, pins, and flashing.
+
+> **IMU caveat**: an MPU6050 measures *orientation*, not position. Heading-hold
+> uses its yaw; horizontal/altitude position feedback isn't available from the
+> IMU alone, so manual throttle is direct by default (altitude-hold needs a `z`
+> source and is mainly useful in `--sim`).
+
 ## Configuration
 
 Everything lives in `config/config.yaml`: broker address/topics, drone physical
-constants (keep in sync with the sim), the altitude PID gains, and the target
-altitude. See the comments in that file.
+constants (keep in sync with the sim), the altitude PID gains, the target
+altitude, the **manual** gamepad mapping, and the **servo** output limits. See
+the comments in that file.
 
 ## MQTT contract
 
@@ -127,6 +178,10 @@ altitude. See the comments in that file.
   — vanes 1 & 3 = fore/aft pair, vanes 2 & 4 = lateral pair
 - **`drone/vanes`** (external → nav): raw vane angles, `{vane1,vane2,vane3,vane4}`
   (or `[v1,v2,v3,v4]`); merged with the altitude-hold throttle
+- **`drone/imu`** (ESP32 → nav): `{t, yaw, pitch, roll, gz}` in **degrees** — folded
+  into telemetry as yaw (radians) for heading-hold
+- **`drone/hw`** (nav → ESP32): `{throttle:[0..1], s1,s2,s3,s4}` — logical servo
+  angles in **degrees** (90 neutral, clamped [40,160]) + ESC throttle fraction
 - **`drone/status`** (nav → world): status strings
 
 ## Live web app (3D viewport + component map + telemetry/PID charts)
@@ -151,3 +206,26 @@ uv run web-bridge --mqtt --host <broker-ip>
 
 In `--demo` mode the bridge also streams a `pid` block (P/I/D terms of the three
 velocity loops) for the profiling charts. See `webapp/README.md` for details.
+
+### `/imu` — live attitude from a real flight controller
+
+The dashboard has a second route, **`/imu`**, that visualises real IMU data. The
+bridge subscribes to two hardware topics and forwards them to the app:
+
+- **`drone/imu`**: `{t, yaw, pitch, roll, gz}` — Euler attitude (degrees) + gyro-Z
+- **`drone/hw`**: `{throttle, s1, s2, s3, s4}` — throttle + four servo angles
+
+The page rotates the 3D drone live by yaw/pitch/roll (with the vanes set from the
+servo angles), shows an artificial-horizon instrument + numeric readouts, and
+plots attitude / gyro-Z history.
+
+```bash
+# IMU on the same broker you point --host at (subscribes drone/imu + drone/hw):
+uv run web-bridge --mqtt --host 10.243.245.93
+
+# OR keep the main twin on one broker and read IMU from a separate flight controller:
+uv run web-bridge --mqtt --host <sim-broker> --imu-host 10.243.245.93
+```
+
+Then open <http://localhost:5173/imu>. The **IMU** nav item shows a green dot when
+attitude data is flowing.
