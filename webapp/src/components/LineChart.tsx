@@ -31,7 +31,7 @@ const num = (v: number, unit?: string) =>
 export default function LineChart({
   series,
   height = 130,
-  windowSec = 14,
+  windowSec = 60,
   zeroLine = true,
   symmetric = false,
   emptyHint,
@@ -73,13 +73,13 @@ export default function LineChart({
         return;
       }
 
-      const tNow = hist[n - 1].t;
+      const tNow = hist[n - 1].clock;
       const tMin = tNow - windowSec;
 
       // find first index within window
       let start = 0;
       for (let i = n - 1; i >= 0; i--) {
-        if (hist[i].t < tMin) { start = i + 1; break; }
+        if (hist[i].clock < tMin) { start = i + 1; break; }
       }
 
       // y range across all series in window
@@ -148,7 +148,7 @@ export default function LineChart({
         for (let i = start; i < n; i++) {
           const v = hist[i][s.key] as number;
           if (!Number.isFinite(v)) { pen = false; continue; }
-          const x = xOf(hist[i].t);
+          const x = xOf(hist[i].clock);
           const y = yOf(v);
           if (!pen) { ctx.moveTo(x, y); pen = true; }
           else ctx.lineTo(x, y);

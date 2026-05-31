@@ -82,7 +82,8 @@ export interface MetaMsg {
 
 // One flattened sample kept in the rolling history (for charts).
 export interface HistorySample {
-  t: number; // seconds (sim time)
+  t: number; // seconds (sim time; 0 on real hardware — see `clock`)
+  clock: number; // seconds (monotonic wall clock) — chart x-axis
   // telemetry
   x: number;
   y: number;

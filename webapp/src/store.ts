@@ -12,7 +12,7 @@ const BRIDGE_URL =
   (import.meta.env.VITE_BRIDGE_URL as string | undefined) ??
   `ws://${location.hostname || "localhost"}:8765`;
 
-const HISTORY_LIMIT = 1200; // ~24 s at 50 Hz
+const HISTORY_LIMIT = 6000; // ~120 s at 50 Hz
 
 type Listener = () => void;
 
@@ -101,6 +101,10 @@ class SimStore {
     const deg = 180 / Math.PI;
     const sample: HistorySample = {
       t: t.t,
+      // Wall-clock stamp (monotonic, seconds) used as the chart x-axis. Sim
+      // time (t.t) is 0 on real hardware (no telemetry source), so keying the
+      // plots off it stalls the trace — this advances regardless of source.
+      clock: performance.now() / 1000,
       x: t.x, y: t.y, z: t.z,
       vx: t.vx, vy: t.vy, vz: t.vz,
       speed: Math.hypot(t.vx, t.vy, t.vz),
