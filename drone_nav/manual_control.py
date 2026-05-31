@@ -53,6 +53,7 @@ class ManualPilot:
 
         self.yaw_setpoint = 0.0       # heading held while the yaw stick is centred
         self._yaw_captured = False
+        self._yaw_i = 0.0             # anti-torque trim integrator (rad of swirl)
         self.alt_setpoint = control.target_altitude
         self._alt_captured = False
         self.alt_hold = manual.altitude_hold_default
@@ -61,17 +62,16 @@ class ManualPilot:
         self.pid_yaw.reset()
         self.pid_vz.reset()
         self._yaw_captured = False
+        self._yaw_i = 0.0
         self._alt_captured = False
 
     # ── throttle ───────────────────────────────────────────────────────────────────
     def _throttle(self, sticks, tlm: Telemetry, dt: float) -> float:
         if not self.alt_hold:
-            # Direct: centre stick ≈ hover, ±1 spans the full range about hover.
+            # Direct: stick position maps linearly to throttle. Full down (−1) =
+            # motor off, full up (+1) = max thrust, centre = 50%.
             self._alt_captured = False
-            hover = self.drone.hover_throttle
-            t = sticks.throttle
-            frac = hover + t * (1.0 - hover) if t >= 0 else hover * (1.0 + t)
-            return _clamp(frac, 0.0, 1.0)
+            return _clamp((sticks.throttle + 1.0) * 0.5, 0.0, 1.0)
 
         # Altitude-hold: stick commands a climb rate; integrate into a setpoint.
         if not self._alt_captured:
@@ -85,19 +85,53 @@ class ManualPilot:
         return math.sqrt(_clamp(t_des / self.drone.thrust_max, 0.0, 1.0))
 
     # ── yaw ──────────────────────────────────────────────────────────────────────
-    def _yaw_swirl(self, sticks, tlm: Telemetry, dt: float) -> float:
+    def _antitorque_ff(self, throttle: float) -> float:
+        """Constant anti-torque swirl bias, ramped in over the first sliver of
+        throttle (no prop wash → no vane authority, so none commanded near idle).
+        """
+        ramp = _clamp(throttle / 0.1, 0.0, 1.0)
+        return self.cfg.yaw_antitorque * ramp
+
+    def _yaw_swirl(self, sticks, tlm: Telemetry, throttle: float, dt: float) -> float:
+        """Anti-torque swirl = feedforward + integral trim + rate damping.
+
+        Three layers cancel the prop's reaction torque efficiently:
+          * feedforward  — a constant swirl gets ~most of the way instantly;
+          * integral trim — absorbs whatever the feedforward misses (battery
+            sag, air density, prop wear), so the *steady-state* spin → 0 even
+            when ``yaw_antitorque`` is imperfect;
+          * rate damping  — ``-kd·gz`` brakes transients (the gyro yaw rate).
+        Everything is summed before the single ``max_swirl`` clamp, and the
+        integrator uses conditional anti-windup against *that* limit.
+        """
+        g = self.pid_yaw.gains
         max_swirl = self.cfg.yaw_swirl_frac * self._mv
+        ff = self._antitorque_ff(throttle)
+        damp = -g.kd * tlm.gz
+
         if abs(sticks.yaw) > 1e-3:
-            # Active steering: command swirl ∝ stick, and keep capturing heading
-            # so we hold wherever we are when the stick is released.
+            # Active steering: stick commands swirl directly. Hold the trim
+            # integrator frozen (don't wind during the manoeuvre) but keep the
+            # feedforward + damping live, and recapture heading continuously.
             self.yaw_setpoint = tlm.yaw
             self._yaw_captured = True
-            return _clamp(sticks.yaw * max_swirl, -max_swirl, max_swirl)
+            return _clamp(sticks.yaw * max_swirl + ff + damp, -max_swirl, max_swirl)
+
         if not self._yaw_captured:
             self.yaw_setpoint = tlm.yaw
             self._yaw_captured = True
-        yaw_err = _wrap_pi(self.yaw_setpoint - tlm.yaw)
-        return _clamp(self.pid_yaw.update(yaw_err, 0.0, dt), -max_swirl, max_swirl)
+
+        err = _wrap_pi(self.yaw_setpoint - tlm.yaw)
+        i_tent = self._yaw_i + g.ki * err * dt
+        if g.i_limit is not None:
+            i_tent = _clamp(i_tent, -g.i_limit, g.i_limit)
+        raw = g.kp * err + i_tent + damp + ff
+        out = _clamp(raw, -max_swirl, max_swirl)
+        # Conditional anti-windup against the real swirl limit: only keep the new
+        # integral if it didn't push an already-saturated output deeper in.
+        if not ((raw > max_swirl and err > 0.0) or (raw < -max_swirl and err < 0.0)):
+            self._yaw_i = i_tent
+        return out
 
     # ── full update ────────────────────────────────────────────────────────────────
     def update(self, sticks, tlm: Telemetry, dt: float) -> Command:
@@ -111,8 +145,8 @@ class ManualPilot:
         tilt = self.cfg.tilt_frac * self._mv
         pitch = _clamp(sticks.pitch * tilt, -self._mv, self._mv)
         roll = _clamp(sticks.roll * tilt, -self._mv, self._mv)
-        yaw = self._yaw_swirl(sticks, tlm, dt)
         throttle = self._throttle(sticks, tlm, dt)
+        yaw = self._yaw_swirl(sticks, tlm, throttle, dt)   # FF needs throttle
 
         # Singlecopter vane mix: each pair sums translation (pitch/roll) with an
         # OPPOSING yaw term. That opposition is what forms the yaw/anti-torque

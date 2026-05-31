@@ -76,8 +76,16 @@ class ManualConfig:
     yaw_swirl_frac: float = 0.6     # fraction of max_vane_rad used for yaw swirl
     climb_rate_max: float = 2.0     # m/s commanded by a full throttle stick (alt-hold)
     altitude_hold_default: bool = False
+    # Feedforward anti-torque: constant swirl (rad) that cancels the prop's
+    # reaction torque. Both the torque and the vanes' authority scale with prop
+    # wash, so the required swirl ANGLE is ~constant while the prop spins — hence
+    # a fixed bias (ramped in with throttle), not a throttle-proportional one.
+    # MUST be bench-tuned: sign depends on prop rotation direction. 0 disables.
+    yaw_antitorque: float = 0.008   # rad of swirl bias (≈sim model; tune on hw)
+    # kp/ki act on heading error (ki = anti-torque trim, nulls residual spin),
+    # kd damps the measured yaw rate gz, i_limit caps the trim swirl.
     yaw: PIDGains = field(default_factory=lambda: PIDGains(
-        kp=1.5, ki=0.0, kd=0.1, out_min=-0.384, out_max=0.384))  # ±22° swirl
+        kp=1.5, ki=0.4, kd=0.1, out_min=-0.384, out_max=0.384, i_limit=0.2))
 
 
 # ── Servo / ESC output mapping (PC → ESP32) ─────────────────────────────────────
@@ -220,6 +228,7 @@ def load_config(path) -> Config:
             climb_rate_max=mn.get("climb_rate_max", cfg.manual.climb_rate_max),
             altitude_hold_default=mn.get("altitude_hold_default",
                                          cfg.manual.altitude_hold_default),
+            yaw_antitorque=mn.get("yaw_antitorque", cfg.manual.yaw_antitorque),
             yaw=_pid_from_dict(mn.get("yaw", {}), cfg.manual.yaw),
         )
     if "servo" in raw:

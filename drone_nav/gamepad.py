@@ -7,9 +7,9 @@ and exposes four normalised stick axes plus a few latched buttons. The control
 math (sticks → vanes/throttle) lives in :mod:`drone_nav.manual_control`.
 
 Left stick = brushless throttle; right stick = vanes (servos); yaw on L1/R1. The
-throttle stick *ramps* the level while deflected and *holds* it when centred
-(like a collective lever), so a self-centring stick still parks the motor at a
-chosen power. Axis/button indices follow the common SDL DualShock 4 layout but
+throttle stick is *direct* — its position is the throttle level (full down =
+motor off, full up = max, centre = 50%). Pinned to minimum while disarmed, so
+arm with the stick down. Axis/button indices follow the common SDL DualShock 4 layout but
 are overridable (they vary a little by OS / pygame-SDL version). Defaults:
 
     axis 1    left stick  Y   → THROTTLE (brushless; up ramps up, centre holds)
@@ -165,14 +165,14 @@ class Gamepad:
             self._kill = True
             self._armed = False
 
-        # Throttle ramp: the left stick raises/lowers the level while deflected
-        # and holds it when centred. Pinned to minimum while disarmed so arming
-        # never spins the motor on its own.
+        # Direct throttle: the stick POSITION is the throttle level — full down
+        # = motor off, full up = max, proportional in between. Pinned to minimum
+        # while disarmed so arming never spins the motor on its own (arm with the
+        # stick down).
         if not self._armed:
             self._throttle = -1.0
         else:
-            rate = self._axis(self.axes.throttle, "throttle") * self.throttle_rate
-            self._throttle = max(-1.0, min(1.0, self._throttle + rate * dt))
+            self._throttle = self._axis(self.axes.throttle, "throttle")
 
         # Yaw is a digital command from the L1/R1 shoulder buttons.
         yaw = float(self._held(self.buttons.yaw_right) -

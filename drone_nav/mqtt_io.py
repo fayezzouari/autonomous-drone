@@ -102,10 +102,11 @@ class MqttLink:
 def _telemetry_from_imu(payload, prev: Optional[Telemetry]) -> Optional[Telemetry]:
     """Fold an ESP32 IMU message into a :class:`Telemetry` snapshot.
 
-    The MPU6050 only gives orientation, so this updates ``yaw`` (the IMU reports
-    degrees; we convert to radians) and carries position/velocity forward from
-    the previous snapshot — the IMU cannot observe them. ``prop_speed`` is left
-    as-is so any live-thrust estimate keeps working.
+    The MPU6050 only gives orientation, so this updates ``yaw`` and the ``gz``
+    yaw rate (the IMU reports both in degrees / deg·s⁻¹; we convert to radians)
+    and carries position/velocity forward from the previous snapshot — the IMU
+    cannot observe them. ``prop_speed`` is left as-is so any live-thrust estimate
+    keeps working.
     """
     import math
 
@@ -123,6 +124,7 @@ def _telemetry_from_imu(payload, prev: Optional[Telemetry]) -> Optional[Telemetr
         x=base.x, y=base.y, z=base.z,
         vx=base.vx, vy=base.vy, vz=base.vz,
         yaw=math.radians(float(data["yaw"])),
+        gz=math.radians(float(data.get("gz", math.degrees(base.gz)))),
         prop_speed=base.prop_speed,
     )
 

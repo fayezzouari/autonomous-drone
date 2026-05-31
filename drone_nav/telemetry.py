@@ -31,6 +31,7 @@ class Telemetry:
     vy: float = 0.0
     vz: float = 0.0
     yaw: float = 0.0
+    gz: float = 0.0          # rad/s — yaw rate (body Z), for heading-hold damping
     prop_speed: float = 0.0  # deg/s — lets the controller estimate live thrust
 
     @property
