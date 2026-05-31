@@ -7,19 +7,22 @@ requires-python = ">=3.9"
 dependencies = [
     "paho-mqtt>=2.0",
     "PyYAML>=6.0",
+    "websockets>=12.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0",
 ]
-web = [
-    "websockets>=12.0",
+gamepad = [
+    "pygame>=2.5",
 ]
 
 [project.scripts]
 drone-nav = "drone_nav.main:main"
+drone-teleop = "drone_nav.teleop:main"
 vane-cmd = "drone_nav.vane_cmd:main"
+phone-imu = "drone_nav.phone_imu:main"
 web-bridge = "sim_bridge.web_bridge:main"
 
 [build-system]
