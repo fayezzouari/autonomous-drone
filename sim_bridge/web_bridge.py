@@ -26,10 +26,15 @@ Two modes:
 Wire protocol (server → client), newline-free JSON objects:
 
   {"type":"meta",  "drone":{...}, "target_altitude":f,
-                   "hover_throttle":f, "ground_z":f, "source":"demo"|"mqtt"}
+                   "hover_throttle":f, "ground_z":f, "source":"demo"|"mqtt",
+                   "obstacles":[{cx,cy,cz,hx,hy,hz}, ...]}
   {"type":"state", "telemetry":{t,x,y,z,vx,vy,vz,yaw,prop_speed},
                    "command":{throttle,vane1,vane2,vane3,vane4},
                    "status":str, "pid":{"alt":{p,i,d,out,setpoint,measurement}}|null}
+  {"type":"obstacles", "obstacles":[{cx,cy,cz,hx,hy,hz}, ...]}   (on change)
+
+The obstacle world AABBs the planner avoids (parsed from the ``drone/obs`` topic,
+see drone_nav/obstacles.py) are forwarded so the web app can draw them.
 
 Run:
   uv run web-bridge --demo
@@ -48,6 +53,7 @@ from pathlib import Path
 from typing import Optional, Set
 
 from drone_nav.config import Config, load_config
+from drone_nav.obstacles import ObstacleField
 from drone_nav.telemetry import Command, Telemetry
 
 try:
@@ -77,9 +83,13 @@ class SharedState:
         self.pid: Optional[dict] = None  # {"alt": {p,i,d,out,setpoint,measurement}}
         self.imu: Optional[dict] = None  # {t, yaw, pitch, roll, gz}  (degrees)
         self.hw: Optional[dict] = None   # {throttle, s1, s2, s3, s4}
+        # World-AABB obstacle boxes [{cx,cy,cz,hx,hy,hz}, ...]; the version bumps
+        # on every change so the broadcaster only re-sends them when they differ.
+        self.obstacles: list = []
+        self.obstacles_version = 0
 
     def update(self, *, telemetry=None, command=None, status=None,
-               pid=..., imu=None, hw=None):
+               pid=..., imu=None, hw=None, obstacles=None):
         with self._lock:
             if telemetry is not None:
                 self.telemetry = telemetry
@@ -93,6 +103,14 @@ class SharedState:
                 self.imu = imu
             if hw is not None:
                 self.hw = hw
+            if obstacles is not None:
+                self.obstacles = obstacles
+                self.obstacles_version += 1
+
+    def obstacles_snapshot(self) -> tuple:
+        """Return ``(obstacles_list, version)`` consistently."""
+        with self._lock:
+            return list(self.obstacles), self.obstacles_version
 
     def snapshot(self) -> dict:
         with self._lock:
@@ -107,7 +125,29 @@ class SharedState:
             }
 
 
-def _meta_message(cfg: Config, source: str) -> dict:
+def _obstacles_to_dicts(field: ObstacleField) -> list:
+    """Serialize an :class:`ObstacleField` to world-AABB dicts for the web app.
+
+    Each box is centre ``(cx,cy,cz)`` + half-extents ``(hx,hy,hz)`` in world
+    metres (Z up) — exactly the inflated-free geometry the planner reasons about,
+    so the browser draws the same boxes the navigator avoids.
+    """
+    return [
+        {"cx": b.cx, "cy": b.cy, "cz": b.cz, "hx": b.hx, "hy": b.hy, "hz": b.hz}
+        for b in field.boxes
+    ]
+
+
+def _config_obstacles(cfg: Config) -> list:
+    """World-AABB boxes from the static config (fallback when no live feed)."""
+    try:
+        field = ObstacleField.from_list(cfg.obstacles, cfg.planner.obstacle_axes)
+    except (ValueError, TypeError):
+        return []
+    return _obstacles_to_dicts(field)
+
+
+def _meta_message(cfg: Config, source: str, obstacles: Optional[list] = None) -> dict:
     d = cfg.drone
     return {
         "type": "meta",
@@ -123,6 +163,7 @@ def _meta_message(cfg: Config, source: str) -> dict:
         "hover_throttle": d.hover_throttle,
         "ground_z": 0.0,
         "target_altitude": cfg.control.target_altitude,
+        "obstacles": obstacles or [],
     }
 
 
@@ -174,17 +215,26 @@ def start_mqtt(cfg: Config, state: SharedState, with_imu: bool = True) -> "objec
         c.subscribe(cfg.mqtt.topic_telemetry)
         c.subscribe(cfg.mqtt.topic_command)
         c.subscribe(cfg.mqtt.topic_status)
+        c.subscribe(cfg.mqtt.topic_obstacles)
         extra = ""
         if with_imu:
             c.subscribe(TOPIC_IMU)
             c.subscribe(TOPIC_HW)
             extra = "/imu/hw"
         print(f"[web-bridge] MQTT connected to {cfg.mqtt.host}:{cfg.mqtt.port}; "
-              f"subscribed to telemetry/cmd/status{extra}")
+              f"subscribed to telemetry/cmd/status/obs{extra}")
 
     def on_message(c, u, msg):
         topic = msg.topic
         if with_imu and _handle_imu_hw(topic, msg.payload, state):
+            return
+        if topic == cfg.mqtt.topic_obstacles:
+            try:
+                field = ObstacleField.from_payload(
+                    msg.payload, cfg.planner.obstacle_axes)
+            except (ValueError, TypeError):
+                return
+            state.update(obstacles=_obstacles_to_dicts(field))
             return
         if topic == cfg.mqtt.topic_telemetry:
             try:
@@ -288,14 +338,16 @@ def start_demo(cfg: Config, state: SharedState, loop: asyncio.AbstractEventLoop)
 # ── WebSocket server ─────────────────────────────────────────────────────────────
 async def serve(host: str, port: int, cfg: Config, state: SharedState, source: str):
     clients: Set = set()
-    meta = json.dumps(_meta_message(cfg, source))
 
     async def handler(ws):
         clients.add(ws)
         peer = getattr(ws, "remote_address", "?")
         print(f"[web-bridge] browser connected ({peer}); {len(clients)} client(s)")
         try:
-            await ws.send(meta)          # one-shot scene description
+            # Build meta per-connection so late joiners get the current obstacle
+            # set (it can arrive after the server starts).
+            obstacles, _ = state.obstacles_snapshot()
+            await ws.send(json.dumps(_meta_message(cfg, source, obstacles)))
             async for _ in ws:           # ignore inbound; keep the socket open
                 pass
         except Exception:
@@ -306,10 +358,17 @@ async def serve(host: str, port: int, cfg: Config, state: SharedState, source: s
 
     async def broadcaster():
         period = 1.0 / BROADCAST_HZ
+        last_obs_version = -1
         while True:
             if clients:
-                payload = json.dumps(state.snapshot())
-                websockets.broadcast(clients, payload)
+                # Obstacles change rarely — broadcast them only when they do,
+                # rather than bloating every 50 Hz state frame.
+                obstacles, version = state.obstacles_snapshot()
+                if version != last_obs_version:
+                    last_obs_version = version
+                    websockets.broadcast(clients, json.dumps(
+                        {"type": "obstacles", "obstacles": obstacles}))
+                websockets.broadcast(clients, json.dumps(state.snapshot()))
             await asyncio.sleep(period)
 
     print(f"[web-bridge] WebSocket listening on ws://{host}:{port}  (source: {source})")
@@ -348,6 +407,13 @@ def main(argv=None) -> int:
 
     state = SharedState()
     source = "demo" if args.demo else "mqtt"
+
+    # Seed with the static config obstacles so the web app has a world to draw
+    # immediately; a live drone/obs message (mqtt mode) replaces them when it lands.
+    seed_obs = _config_obstacles(cfg)
+    if seed_obs:
+        state.update(obstacles=seed_obs)
+        print(f"[web-bridge] seeded {len(seed_obs)} obstacle(s) from config")
 
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
