@@ -64,9 +64,17 @@ class GotoController:
         a2 = roll  + yaw   a4 = roll  − yaw      (E/W pair → lateral  + swirl)
     """
 
-    def __init__(self, drone: DroneParams, cfg: GotoConfig):
+    def __init__(self, drone: DroneParams, cfg: GotoConfig,
+                 couple_climb: bool = False, climb_floor: float = 0.2):
         self.drone = drone
         self.cfg = cfg
+        # When set, the vertical speed is limited to track horizontal progress so
+        # the drone ascends *along* the path instead of climbing ahead of it (the
+        # "goes straight up from a standstill" effect — vertical responds far
+        # faster than horizontal from rest). ``climb_floor`` is the minimum climb
+        # rate still allowed so near-vertical legs / takeoff aren't stalled.
+        self.couple_climb = couple_climb
+        self.climb_floor = climb_floor
         self.pid_vx = PID(cfg.vel_xy)
         self.pid_vy = PID(cfg.vel_xy)
         self.pid_vz = PID(cfg.vel_z)
@@ -90,6 +98,16 @@ class GotoController:
         vsp_y = _clamp(self.cfg.pos_xy_p * (ty - tlm.y), -vmax, vmax)
         vsp_z = _clamp(self.cfg.pos_z_p * (tz - tlm.z),
                        -self.cfg.vz_max, self.cfg.vz_max)
+
+        # ── Climb-rate coupling: don't rise faster than forward progress would
+        #    carry us up the path slope (kills the takeoff "shoot straight up"). ─
+        if self.couple_climb:
+            d_h = math.hypot(tx - tlm.x, ty - tlm.y)
+            if d_h > 0.3:  # leg has a real horizontal component
+                slope = (tz - tlm.z) / d_h
+                v_h = math.hypot(tlm.vx, tlm.vy)
+                vz_allowed = abs(v_h * slope) + self.climb_floor
+                vsp_z = _clamp(vsp_z, -vz_allowed, vz_allowed)
 
         # ── Inner velocity → acceleration ─────────────────────────────────────
         ax = self.pid_vx.update(vsp_x, tlm.vx, dt)

@@ -19,6 +19,7 @@ from typing import List, Optional
 import yaml
 
 from .pid import PIDGains
+from .planner import PlannerConfig
 
 
 # ── Drone physical parameters (mirror the sim's constants) ─────────────────────
@@ -157,6 +158,9 @@ class MQTTConfig:
     topic_status: str = "drone/status"           # nav → world
     topic_imu: str = "drone/imu"                 # ESP32 IMU → nav (orientation)
     topic_hw_cmd: str = "drone/hw"               # nav → ESP32 (servo deg + ESC)
+    topic_obstacles: str = "drone/obs"           # sim → nav (obstacle box list)
+    topic_path: str = "drone/path"               # nav → world (planned waypoints)
+    topic_goto: str = "drone/goto"               # world → nav (live A→B target)
 
 
 @dataclass
@@ -168,6 +172,10 @@ class Config:
     manual: ManualConfig = field(default_factory=ManualConfig)
     servo: ServoConfig = field(default_factory=ServoConfig)
     mqtt: MQTTConfig = field(default_factory=MQTTConfig)
+    planner: PlannerConfig = field(default_factory=PlannerConfig)
+    # Static obstacle boxes for offline (--sim) demos/tests; live runs read them
+    # from the MQTT ``drone/obs`` topic instead. Each item is a {c,w,h,t} dict.
+    obstacles: List[dict] = field(default_factory=list)
 
 
 # ── Loading ─────────────────────────────────────────────────────────────────────
@@ -238,4 +246,10 @@ def load_config(path) -> Config:
         m = raw["mqtt"]
         cfg.mqtt = MQTTConfig(**{k: v for k, v in m.items()
                                  if k in vars(MQTTConfig())})
+    if "planner" in raw:
+        p = raw["planner"]
+        cfg.planner = PlannerConfig(**{k: v for k, v in p.items()
+                                       if k in vars(PlannerConfig())})
+    if "obstacles" in raw and isinstance(raw["obstacles"], list):
+        cfg.obstacles = list(raw["obstacles"])
     return cfg
