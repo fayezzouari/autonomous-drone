@@ -5,6 +5,7 @@ import SimulationViewport from "./components/SimulationViewport";
 import ComponentMap from "./components/ComponentMap";
 import Visualizations from "./components/Visualizations";
 import ImuView from "./components/ImuView";
+import Profiling from "./components/Profiling";
 import { store } from "./store";
 
 function DashboardPage() {
@@ -30,6 +31,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<DashboardPage />} />
         <Route path="/position" element={<ImuView />} />
+        <Route path="/profiling" element={<Profiling />} />
       </Routes>
     </div>
   );

@@ -19,6 +19,7 @@ export const COLOR = {
   downwash: "#0070f3",
   body: "#3a3a3a",
   accent: "#0070f3",
+  obstacle: "#ff5c5c", // boxes the navigator plans around
   // named palette (kept in sync with theme.css)
   green: "#1edd8a",
   amber: "#f5a623",

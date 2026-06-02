@@ -64,6 +64,23 @@ export interface StateMsg {
   hw: Hw | null;
 }
 
+// One obstacle box: world-frame axis-aligned box (Z up), centre + half-extents
+// (metres). These are the boxes the navigator plans around (drone/obs topic).
+export interface Obstacle {
+  cx: number;
+  cy: number;
+  cz: number;
+  hx: number;
+  hy: number;
+  hz: number;
+}
+
+// Sent whenever the obstacle set changes (and once inside `meta` on connect).
+export interface ObstaclesMsg {
+  type: "obstacles";
+  obstacles: Obstacle[];
+}
+
 export interface MetaMsg {
   type: "meta";
   source: "demo" | "mqtt";
@@ -78,6 +95,7 @@ export interface MetaMsg {
   hover_throttle: number;
   ground_z: number;
   target_altitude: number;
+  obstacles?: Obstacle[];
 }
 
 // One flattened sample kept in the rolling history (for charts).

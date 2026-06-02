@@ -6,7 +6,7 @@
 // and only notifies React listeners for *low-frequency* changes (connection
 // state, meta, status string). That keeps the UI smooth.
 
-import type { HistorySample, MetaMsg, StateMsg } from "./types";
+import type { HistorySample, MetaMsg, Obstacle, ObstaclesMsg, StateMsg } from "./types";
 
 const BRIDGE_URL =
   (import.meta.env.VITE_BRIDGE_URL as string | undefined) ??
@@ -28,6 +28,11 @@ class SimStore {
   source: "demo" | "mqtt" | "—" = "—";
   hasPid = false;
   hasImu = false;
+  // Obstacle boxes the navigator plans around. They change rarely, so a counter
+  // bumped on each new set lets React (and useSyncExternalStore) re-render only
+  // when the world actually changes.
+  obstacles: Obstacle[] = [];
+  obstaclesVersion = 0;
 
   private listeners = new Set<Listener>();
   private ws: WebSocket | null = null;
@@ -69,7 +74,7 @@ class SimStore {
   }
 
   private onMessage(raw: string) {
-    let msg: MetaMsg | StateMsg;
+    let msg: MetaMsg | StateMsg | ObstaclesMsg;
     try {
       msg = JSON.parse(raw);
     } catch {
@@ -78,6 +83,12 @@ class SimStore {
     if (msg.type === "meta") {
       this.meta = msg;
       this.source = msg.source;
+      this.setObstacles(msg.obstacles ?? []);
+      this.bump();
+      return;
+    }
+    if (msg.type === "obstacles") {
+      this.setObstacles(msg.obstacles);
       this.bump();
       return;
     }
@@ -92,6 +103,11 @@ class SimStore {
       this.status = msg.status;
       this.bump();
     }
+  }
+
+  private setObstacles(obs: Obstacle[]) {
+    this.obstacles = obs;
+    this.obstaclesVersion++;
   }
 
   private pushHistory(s: StateMsg) {
@@ -142,6 +158,7 @@ class SimStore {
       meta: this.meta,
       hasPid: this.hasPid,
       hasImu: this.hasImu,
+      obstaclesVersion: this.obstaclesVersion,
     };
   }
   private bump() {

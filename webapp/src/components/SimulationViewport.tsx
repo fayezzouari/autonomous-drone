@@ -16,6 +16,7 @@ const DEG = Math.PI / 180;
 // Where to float the twin when there is no position source (real-hardware manual
 // flight has no GPS/VICON), so the live IMU attitude stays clearly in view.
 const DISPLAY_HOVER_Z = 1.5;
+const WORLD_AXIS_LEN = 3.0; // m — length of the fixed world X/Y reference axes
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 function FlyingDrone() {
@@ -171,6 +172,60 @@ function Trail() {
   return <line>{/* @ts-ignore drei line */}<primitive object={geom} attach="geometry" /><primitive object={mat} attach="material" /></line>;
 }
 
+// Fixed world/scene reference axes at the origin, matching the Blender sim's
+// coordinate frame (Z up): +X and +Y lie on the ground plane. A static ground
+// reference, not attached to the drone.
+function WorldAxes() {
+  const axisX = useMemo(() => new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(0, 0, 0), WORLD_AXIS_LEN, COLOR.red, 0.3, 0.18), []);
+  const axisY = useMemo(() => new THREE.ArrowHelper(new THREE.Vector3(0, 1, 0), new THREE.Vector3(0, 0, 0), WORLD_AXIS_LEN, COLOR.green, 0.3, 0.18), []);
+  return (
+    <group>
+      <primitive object={axisX} />
+      <primitive object={axisY} />
+      <Html center distanceFactor={14} position={[WORLD_AXIS_LEN + 0.25, 0, 0]} style={{ pointerEvents: "none" }}>
+        <div style={{ font: "bold 14px ui-monospace, monospace", color: COLOR.red }}>X</div>
+      </Html>
+      <Html center distanceFactor={14} position={[0, WORLD_AXIS_LEN + 0.25, 0]} style={{ pointerEvents: "none" }}>
+        <div style={{ font: "bold 14px ui-monospace, monospace", color: COLOR.green }}>Y</div>
+      </Html>
+    </group>
+  );
+}
+
+// Obstacle boxes the navigator plans around (from the drone/obs MQTT topic,
+// forwarded by the web bridge). Drawn as translucent red boxes with a wire
+// outline so the planned trajectory's clearance is visible at a glance.
+function Obstacles() {
+  // Re-render only when the obstacle set changes (snapshot bumps the version).
+  const snap = useSimSnapshot();
+  const boxes = store.obstacles;
+  void snap.obstaclesVersion;
+  if (boxes.length === 0) return null;
+  return (
+    <group>
+      {boxes.map((b, i) => (
+        <group key={i} position={[b.cx, b.cy, b.cz]}>
+          <mesh>
+            <boxGeometry args={[b.hx * 2, b.hy * 2, b.hz * 2]} />
+            <meshStandardMaterial
+              color={COLOR.obstacle}
+              transparent
+              opacity={0.22}
+              roughness={0.7}
+              metalness={0.0}
+            />
+          </mesh>
+          {/* crisp wire outline so the footprint reads clearly */}
+          <lineSegments>
+            <edgesGeometry args={[new THREE.BoxGeometry(b.hx * 2, b.hy * 2, b.hz * 2)]} />
+            <lineBasicMaterial color={COLOR.obstacle} transparent opacity={0.75} />
+          </lineSegments>
+        </group>
+      ))}
+    </group>
+  );
+}
+
 // The controller holds a target altitude; show it as a translucent disc the
 // drone settles onto, with a live label.
 function AltitudeTarget() {
@@ -236,6 +291,8 @@ export default function SimulationViewport() {
           />
 
           <AltitudeTarget />
+          <WorldAxes />
+          <Obstacles />
           <Trail />
           <FlyingDrone />
 

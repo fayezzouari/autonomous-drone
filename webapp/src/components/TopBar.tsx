@@ -22,6 +22,9 @@ export default function TopBar() {
           Position
           <span className={"nav-dot" + (snap.hasImu ? " on" : "")} />
         </NavLink>
+        <NavLink to="/profiling" className={({ isActive }) => "nav-link" + (isActive ? " active" : "")}>
+          Profiling
+        </NavLink>
       </nav>
       <div className="topbar-right">
         <span className="pill">
