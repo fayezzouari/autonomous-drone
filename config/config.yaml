@@ -68,13 +68,51 @@ mission:
   hold_time: 1.0           # s sustained inside the arrival window
   loop: false
 
+# ── Obstacle-avoiding path planner (used by --goto/--mission with --avoid) ─────────
+# The drone is not a point: every obstacle box is grown by (drone_radius +
+# safety_margin) before planning, so the flown path keeps that much clearance.
+# Obstacles arrive (on `drone/obs`, or here for --sim) as a list of boxes given
+# by centre + HALF-extents:
+#   {cx, cy, cz, hw: <half-width>, hd: <half-depth>, hh: <half-height>}  (optional yaw, rad)
+# (the older {c:[x,y,z], w, h, t} full-extent shape is still accepted). They map
+# into the nav world frame by:
+#   • obstacle_axes: which extent (w/t=d/h) becomes the X,Y,Z half-extent
+#     (default wdh → X=width(hw), Y=depth(hd), Z=height(hh) — matches the
+#     Blender publisher, which builds box verts as (±hw, ±hd, ±hh))
+#   • obstacle_flip: centre axes negated to undo a frame sign convention
+#     ('' = none; the current export is already world-frame)
+planner:
+  drone_radius: 0.5       # m   matches the Blender sim's DRONE_RADIUS sphere collider
+  safety_margin: 0.30      # m   extra clearance to absorb controller overshoot at speed
+  resolution: 0.5          # m   A* lattice cell size
+  z_min: 0              # m   don't plan cruise below this altitude
+  z_max: 12.0              # m   …or above this one
+  bounds_pad: 3.0          # m   expand the search box this far around A and B
+  max_nodes: 2000000        #     search expansion cap (fails over to hover if hit)
+  algorithm: theta         #     'theta' (any-angle, default) or 'astar' (grid + shortcut)
+  obstacle_axes: wdh       #     which extent maps to X,Y,Z (hw→X, hd→Y, hh→Z — matches the Blender publisher)
+  obstacle_flip: ''        #     centre axes to negate (source→world); '' for none (publisher is world-frame)
+  obstacle_wait: 3.0       # s   at startup, wait this long for the first drone/obs before planning
+  cruise_speed: 7.0        # m/s horizontal speed cap while avoiding (slower = tighter line tracking; 0 = use goto v_max_xy)
+  climb_speed: 0.5         # m/s vertical speed cap while avoiding (gentler launch/descent; 0 = use goto vz_max)
+  climb_floor: 0.25        # m/s min climb kept when coupling climb to forward progress (anti shoot-straight-up)
+  follow_spacing: 0.8      # m   re-sample the planned path to this spacing so the drone hugs the line
+  preview_pause: 3.0       # s   after the first plan, hold and publish drone/path this long before flying (0 = off)
+
+# Static obstacles for OFFLINE demos/tests (`--sim --avoid`), same shape as the
+# live `drone/obs` boxes. Live runs ignore these and use the topic instead.
+# With axes=wdh this slab lands at world x∈[5,7] (hw=1), y∈[2,8] (hd=3),
+# z∈[0,8] (hh=4), straddling the A→B route:
+obstacles:
+  - { cx: 6.0, cy: 5.0, cz: 4.0, hw: 1.0, hd: 3.0, hh: 4.0 }   # tall slab across the route
+
 # ── Manual gamepad (drone-teleop) control ────────────────────────────────────────
 # Maps PS4 sticks -> vanes + throttle. Right stick = pitch/roll, left stick X = yaw,
 # left stick Y = throttle (or climb rate with altitude-hold on).
 manual:
   deadzone: 0.08         # stick deadzone (fraction)
   expo: 0.30             # 0 linear .. 1 softer around centre
-  throttle_rate: 0.6     # throttle units/s while Triangle(up)/Cross(down) held
+  throttle_rate: 0.2     # throttle units/s while Triangle(up)/Cross(down) held
   tilt_frac: 1.0         # fraction of max vane deflection a full stick commands
   yaw_rate_max: 1.2      # rad/s at full yaw stick
   yaw_swirl_frac: 0.6    # fraction of max vane deflection used for yaw swirl
@@ -110,7 +148,7 @@ servo:
 
 # ── MQTT transport ──────────────────────────────────────────────────────────────
 mqtt:
-  host: 192.168.1.184    # broker (mosquitto) location — same LAN IP the ESP32 uses
+  host: 10.68.88.93    # broker (mosquitto) location — same LAN IP the ESP32 uses
   port: 1883
   # username: myuser
   # password: mypass
@@ -122,3 +160,6 @@ mqtt:
   topic_status: drone/status         # nav -> world
   topic_imu: drone/imu               # ESP32 IMU -> nav (orientation)
   topic_hw_cmd: drone/hw             # nav -> ESP32 (servo degrees + ESC)
+  topic_obstacles: drone/obs         # sim -> nav (obstacle box list)
+  topic_path: drone/path             # nav -> world (planned waypoints)
+  topic_goto: drone/goto             # world -> nav (live A->B target, e.g. [x,y,z])
